@@ -69,7 +69,19 @@ with tempfile.TemporaryDirectory(prefix='swr-audio-') as folder, sync_playwright
     host.evaluate('()=>{const s=document.querySelector("#backstage [data-id=host-camera] video").srcObject;window.__camera=s.getVideoTracks()[0];window.__mic=s.getAudioTracks()[0]}')
     guest.goto(origin+'/guest?room='+keys['room']+'&label=Panelista#invite='+keys['inviteKey']);guest.locator('#pw').fill('FixtureRoomOnly');guest.locator('#joinBtn').click()
     expect(guest.locator('#connection')).to_be_hidden(timeout=45000)
-    expect(host.locator('#backstage .tile')).to_have_count(2,timeout=35000)
+    try:
+        expect(host.locator('#backstage .tile')).to_have_count(2,timeout=35000)
+    except Exception:
+        print(json.dumps({
+            'errors':errors,
+            'guestToasts':guest.locator('#toasts').inner_text() if guest.locator('#toasts').count() else '',
+            'guestJoinBtn':guest.locator('#joinBtn').inner_text(),
+            'guestJoinDisabled':guest.locator('#joinBtn').is_disabled(),
+            'guestConn':guest.locator('#connection').inner_text(),
+            'guestDevWarn':guest.locator('#devWarn').inner_text(),
+            'hostTiles':[host.locator('#backstage .tile').nth(i).get_attribute('data-id') for i in range(host.locator('#backstage .tile').count())],
+        }),flush=True)
+        raise
     guest_id=host.locator('#backstage .tile:not([data-id="host-camera"])').get_attribute('data-id')
     audio_advances(guest,'[data-id="host-camera"] video');audio_advances(host,'[data-id="'+guest_id+'"] video')
 
