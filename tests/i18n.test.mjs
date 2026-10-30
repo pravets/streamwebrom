@@ -20,7 +20,7 @@ test('every language ships exactly the same keys, source included', () => {
 
 test('no translation is empty and keys stay namespaced', () => {
   for (const key of keys) {
-    assert.match(key, /^[a-z][a-zA-Z]*\.[a-zA-Z0-9]+$/, `bad key ${key}`);
+    assert.match(key, /^[a-z][a-zA-Z]*\.[a-zA-Z0-9_]+$/, `bad key ${key}`);
     for (const [code, dict] of [['es', es], ['en', en], ['ru', ru]]) {
       const value = dict[key];
       if (typeof value === 'string') {
@@ -110,3 +110,26 @@ test('every key used by browser modules exists', async () => {
 function hasIn(dict, key) {
   return Object.prototype.hasOwnProperty.call(dict, key);
 }
+
+test('every error code the server can send has a translation', async () => {
+  const root = new URL('../internal/', import.meta.url);
+  const codes = new Set();
+  const walk = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const next = new URL(entry.name + (entry.isDirectory() ? '/' : ''), dir);
+      if (entry.isDirectory()) await walk(next);
+      else if (entry.name.endsWith('.go') && !entry.name.endsWith('_test.go')) {
+        const source = await readFile(next, 'utf8');
+        for (const match of source.matchAll(/Userf\("([a-z0-9_]+)"/g)) codes.add(match[1]);
+        for (const match of source.matchAll(/Code: "([a-z0-9_]+)"/g)) codes.add(match[1]);
+        for (const match of source.matchAll(/errorJSON\("(?:[^"\\]|\\.)*", "([a-z0-9_]+)"\)/g)) codes.add(match[1]);
+      }
+    }
+  };
+  await walk(root);
+  assert.ok(codes.size >= 20, `only ${codes.size} server codes found`);
+  const missing = [...codes].filter((code) => !(`server.${code}` in es));
+  assert.deepEqual(missing, [], 'server codes without a dictionary entry');
+  const extra = Object.keys(es).filter((key) => key.startsWith('server.') && !codes.has(key.slice(7)));
+  assert.deepEqual(extra, [], 'server dictionary entries the server never sends');
+});

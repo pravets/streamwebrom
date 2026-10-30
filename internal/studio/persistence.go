@@ -2,7 +2,6 @@ package studio
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -129,7 +128,7 @@ func (h *Hub) saveRoom(host *Peer, m Msg) error {
 func (h *Hub) SaveRoom(id, key string, value json.RawMessage, auto bool) (*PersistenceInfo, error) {
 	r := h.Room(id)
 	if r == nil || !r.CheckHost(key) {
-		return nil, errors.New("unauthorized")
+		return nil, Userf("unauthorized", "unauthorized")
 	}
 	action := ""
 	if auto {
@@ -143,27 +142,27 @@ func (h *Hub) SaveRoom(id, key string, value json.RawMessage, auto bool) (*Persi
 
 func (h *Hub) configurePersistence(r *Room, m Msg) error {
 	if h.o.StoreDir == "" {
-		return errors.New("El servidor no tiene almacenamiento de salas configurado")
+		return Userf("room_storage_missing", "El servidor no tiene almacenamiento de salas configurado")
 	}
 	var in struct {
 		Days    int             `json:"days"`
 		Options json.RawMessage `json:"options"`
 	}
 	if len(m.Value) > 6<<20 || json.Unmarshal(m.Value, &in) != nil {
-		return errors.New("Opciones de sala inválidas")
+		return Userf("room_options_invalid", "Opciones de sala inválidas")
 	}
 	if in.Days != 0 && in.Days != 30 && in.Days != 60 && in.Days != 90 && in.Days != 365 {
-		return errors.New("Caducidad inválida")
+		return Userf("room_expiry_invalid", "Caducidad inválida")
 	}
 	r.mu.Lock()
 	if len(r.guestHash) == 0 {
 		r.mu.Unlock()
-		return errors.New("Solo se pueden guardar salas con contraseña")
+		return Userf("room_password_required", "Solo se pueden guardar salas con contraseña")
 	}
 	oldEnabled, oldDays, oldExpires, oldOptions := r.persistent, r.persistDays, r.expires, r.options
 	if m.Action == "options" && !r.persistent {
 		r.mu.Unlock()
-		return errors.New("La sala aún no está guardada")
+		return Userf("room_not_saved", "La sala aún no está guardada")
 	}
 	r.persistent = true
 	r.options = in.Options
@@ -182,7 +181,7 @@ func (h *Hub) configurePersistence(r *Room, m Msg) error {
 		r.mu.Lock()
 		r.persistent, r.persistDays, r.expires, r.options = oldEnabled, oldDays, oldExpires, oldOptions
 		r.mu.Unlock()
-		return errors.New("No se pudo guardar la sala en disco")
+		return Userf("room_save_failed", "No se pudo guardar la sala en disco")
 	}
 	h.notifyPersistence(r)
 	return nil
@@ -194,7 +193,7 @@ func (h *Hub) forgetRoom(host *Peer, m Msg) error {
 	r := host.room
 	if h.o.StoreDir != "" {
 		if err := os.Remove(filepath.Join(h.o.StoreDir, r.ID+".json")); err != nil && !os.IsNotExist(err) {
-			return errors.New("No se pudo quitar la persistencia")
+			return Userf("room_persistence_remove_failed", "No se pudo quitar la persistencia")
 		}
 	}
 	r.mu.Lock()
@@ -268,7 +267,7 @@ func (h *Hub) loadRooms() {
 		r.onSave = func() {
 			if err := h.persist(r); err != nil {
 				h.log.Error("room save failed", "room", r.ID)
-				r.toHosts(Msg{Type: "error", Error: "No se pudo actualizar la sala guardada en disco"})
+				r.toHosts(Msg{Type: "error", Error: "No se pudo actualizar la sala guardada en disco", Code: "room_save_failed"})
 			}
 		}
 		h.rooms[r.ID] = r

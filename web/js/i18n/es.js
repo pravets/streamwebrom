@@ -8,7 +8,8 @@ import { es as effects } from "./es/effects.js";
 import { es as diagnostics } from "./es/diagnostics.js";
 import { es as pages } from "./es/pages.js";
 import { es as misc } from "./es/misc.js";
+import { es as server } from "./es/server.js";
 
 export const es = {
-  ...common, ...studio, ...studiojs, ...guest, ...home, ...devices, ...effects, ...diagnostics, ...pages, ...misc,
+  ...common, ...studio, ...studiojs, ...guest, ...home, ...devices, ...effects, ...diagnostics, ...pages, ...misc, ...server,
 };

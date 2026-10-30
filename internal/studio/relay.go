@@ -3,7 +3,6 @@ package studio
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/pion/webrtc/v4"
@@ -58,27 +57,27 @@ func (h *Hub) setRelay(host *Peer, m Msg) error {
 		Password string `json:"password"`
 	}
 	if len(m.Value) > 1024 || json.Unmarshal(m.Value, &req) != nil {
-		return errors.New("Solicitud de conexión inválida")
+		return Userf("relay_request_invalid", "Solicitud de conexión inválida")
 	}
 	r := host.room
 	switch req.Provider {
 	case "cloudflare":
 		access := h.relayAccess(r)
 		if !access.Password {
-			return errors.New("Cloudflare requiere una sala con contraseña")
+			return Userf("cloudflare_password_required", "Cloudflare requiere una sala con contraseña")
 		}
 		if !access.Available {
-			return errors.New("El administrador no ha habilitado el acceso protegido a Cloudflare")
+			return Userf("cloudflare_unavailable", "El administrador no ha habilitado el acceso protegido a Cloudflare")
 		}
 		if !h.relayRate.Allow() {
-			return errors.New("Demasiados intentos; espera antes de volver a validar la contraseña maestra")
+			return Userf("relay_rate_limited", "Demasiados intentos; espera antes de volver a validar la contraseña maestra")
 		}
 		if len(req.Password) > 72 || bcrypt.CompareHashAndPassword([]byte(h.o.CloudflareMasterHash), []byte(req.Password)) != nil {
-			return errors.New("Contraseña maestra incorrecta")
+			return Userf("relay_master_password_invalid", "Contraseña maestra incorrecta")
 		}
 	case "local":
 	default:
-		return errors.New("Relé desconocido")
+		return Userf("relay_unknown", "Relé desconocido")
 	}
 	r.mu.Lock()
 	changed := r.state.Connection != req.Provider

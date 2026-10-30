@@ -21,6 +21,7 @@ import { RoomAudio, pictureInPicture } from "./room-audio.js";
 import { screenAudioNotice, resumeCaptureAudio, stopScreenCapture } from "./devices.js";
 import { chooseScreen } from "./screen-share.js";
 import { installI18n, t, onLangChange } from "./i18n.js";
+import { serverError } from "./rtc.js";
 
 installI18n();
 
@@ -411,7 +412,7 @@ function showHostMessage(text) {
   document.body.append(box);
   setTimeout(() => box.remove(), 30000);
 }
-sig.on("error", (m) => toast(m.error, "err"));
+sig.on("error", (m) => toast(serverError(m), "err"));
 
 function ask(text, btn, fn) {
   // Privacy: the host can turn things off, but turning them on needs the guest's click.

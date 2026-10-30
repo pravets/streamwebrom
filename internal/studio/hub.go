@@ -153,7 +153,7 @@ func (h *Hub) CreateRoom(id, guestPassword, title string, lobby bool) (Keys, err
 	r.onSave = func() {
 		if err := h.persist(r); err != nil {
 			h.log.Error("room save failed", "room", r.ID)
-			r.toHosts(Msg{Type: "error", Error: "No se pudo actualizar la sala guardada en disco"})
+			r.toHosts(Msg{Type: "error", Error: "No se pudo actualizar la sala guardada en disco", Code: "room_save_failed"})
 		}
 	}
 	h.rooms[id] = r
@@ -259,16 +259,16 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 		if !p.lim.Allow() {
-			p.Send(Msg{Type: "error", Error: "rate limited"})
+			p.Send(Msg{Type: "error", Error: "rate limited", Code: "rate_limited"})
 			continue
 		}
 		var m Msg
 		if err := json.Unmarshal(data, &m); err != nil {
-			p.Send(Msg{Type: "error", Error: "bad json"})
+			p.Send(Msg{Type: "error", Error: "bad json", Code: "bad_json"})
 			continue
 		}
 		if err := h.handle(ctx, p, m); err != nil {
-			p.Send(Msg{Type: "error", Error: err.Error(), ReqID: m.ReqID, Action: m.Type})
+			p.Send(ErrorMsg(err, m.ReqID, m.Type))
 		}
 	}
 }
@@ -476,7 +476,7 @@ func (h *Hub) join(p *Peer, m Msg) error {
 	case RoleGuest, "":
 		role = RoleGuest
 		if !r.CheckGuest(m.Password) {
-			return errors.New("invalid password")
+			return Userf("room_password_invalid", "invalid password")
 		}
 	default:
 		return errors.New("invalid role")
@@ -489,11 +489,11 @@ func (h *Hub) join(p *Peer, m Msg) error {
 	r.mu.Lock()
 	if r.closed || (r.expires > 0 && r.expires <= time.Now().UnixMilli()) {
 		r.mu.Unlock()
-		return errors.New("room expired")
+		return Userf("room_expired", "room expired")
 	}
 	if role == RoleGuest && r.persistent && len(r.passes) >= maxPasses && !r.passes[m.Rejoin] {
 		r.mu.Unlock()
-		return errors.New("La sala alcanzó el máximo de participantes guardados")
+		return Userf("room_participants_full", "La sala alcanzó el máximo de participantes guardados")
 	}
 	if len(r.peers)+len(r.waiting) >= h.o.MaxPeers {
 		r.mu.Unlock()
@@ -734,7 +734,7 @@ func (h *Hub) publish(ctx context.Context, p *Peer, m Msg) error {
 		allowed := p.room.screenPermitLocked(p, screenEpoch)
 		p.room.mu.RUnlock()
 		if !allowed {
-			return errors.New("Compartir pantalla requiere autorización del anfitrión y estar en el escenario")
+			return Userf("screen_share_forbidden", "Compartir pantalla requiere autorización del anfitrión y estar en el escenario")
 		}
 	}
 	id := m.Stream
@@ -775,11 +775,11 @@ func (h *Hub) publish(ctx context.Context, p *Peer, m Msg) error {
 	pass := p.pass
 	p.room.mu.RUnlock()
 	if role == RoleGuest && (strings.HasPrefix(id, "host-") || (savedOwner != "" && savedOwner != pass)) {
-		return errors.New("Este identificador de cámara pertenece a otro participante")
+		return Userf("camera_owned_by_other", "Este identificador de cámara pertenece a otro participante")
 	}
 	// A guest may not hijack someone else's stream id.
 	if old := p.room.Stream(id); old != nil && old.Owner != p.ID && role != RoleHost {
-		return errors.New("stream id in use")
+		return Userf("stream_id_in_use", "stream id in use")
 	}
 	release, err := p.room.reserveStream(id, p.ID, role == RoleHost, h.o.MaxPeers*8)
 	if err != nil {
@@ -815,7 +815,7 @@ func (h *Hub) publish(ctx context.Context, p *Peer, m Msg) error {
 			delete(p.pubs, id)
 		}
 		p.mu.Unlock()
-		return errors.New("La sala se cerró o se revocó el permiso para compartir pantalla")
+		return Userf("screen_share_revoked", "La sala se cerró o se revocó el permiso para compartir pantalla")
 	}
 	p.room.mu.Lock()
 	p.room.savedSources[id] = s.Info()
@@ -1270,10 +1270,10 @@ func validURL(u string) bool {
 
 func validBrand(b Brand) error {
 	if b.Color != "" && !colorRe.MatchString(b.Color) {
-		return errors.New("brand color must be #hex")
+		return Userf("brand_color_invalid", "brand color must be #hex")
 	}
 	if b.Background != "" && !colorRe.MatchString(b.Background) && !validURL(b.Background) {
-		return errors.New("brand background must be #hex or an https/data image URL")
+		return Userf("brand_background_invalid", "brand background must be #hex or an https/data image URL")
 	}
 	if !validURL(b.Logo) || !validURL(b.Overlay) {
 		return errors.New("logo/overlay must be https:// or data:image/ URLs")

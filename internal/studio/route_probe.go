@@ -16,7 +16,7 @@ func (h *Hub) CreateRoomRouteProbe(room, password string) (Keys, error) {
 	if room != "" {
 		r := h.Room(room)
 		if r == nil || !r.CheckGuest(password) {
-			return Keys{}, errors.New("Sala o contraseña inválida")
+			return Keys{}, Userf("route_auth_invalid", "Sala o contraseña inválida")
 		}
 		cloud = r.CloudflareEnabled()
 	}

@@ -31,6 +31,7 @@ type Msg struct {
 	Key      string `json:"key,omitempty"`      // host key or view key
 	Password string `json:"password,omitempty"` // guest password
 	PeerID   string `json:"peerId,omitempty"`
+	Code     string `json:"code,omitempty"` // stable code of a user-facing error, translated by the browser
 	Invite   string `json:"invite,omitempty"` // invite key from the host's invite link: skips the lobby
 	Rejoin   string `json:"rejoin,omitempty"` // pass given to an admitted guest so a reconnect skips the lobby
 	Route    string `json:"route,omitempty"`  // empty = default provider; local = operator-installed relay
