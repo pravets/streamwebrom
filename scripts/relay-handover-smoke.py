@@ -64,6 +64,7 @@ with tempfile.TemporaryDirectory(prefix='swr-audio-') as folder, sync_playwright
     keys=ctx.request.post(origin+'/api/rooms',data={'room':'handover-'+str(time.time_ns()),'password':'FixtureRoomOnly','title':'Prueba interna de audio'}).json()
     errors=[];host=ctx.new_page();guest=ctx.new_page()
     for page in [host,guest]:page.on('pageerror',lambda e:errors.append(str(e)))
+    ctx.add_init_script("window.__toastLog=[];new MutationObserver(()=>{const b=document.querySelector('#toasts');if(!b)return;for(const n of b.children)if(!n.__logged){n.__logged=1;window.__toastLog.push(n.textContent)}}).observe(document.documentElement,{childList:true,subtree:true});window.addEventListener('unhandledrejection',e=>{window.__reject=window.__reject||[];window.__reject.push(String(e.reason&&e.reason.message||e.reason))});")
     host.goto(origin+'/studio?room='+keys['room']+'#key='+keys['hostKey']);expect(host.locator('#status')).to_have_text('conectado',timeout=30000)
     host.locator('#addCam').click();expect(host.locator('#backstage [data-id="host-camera"]')).to_be_visible(timeout=35000)
     host.evaluate('()=>{const s=document.querySelector("#backstage [data-id=host-camera] video").srcObject;window.__camera=s.getVideoTracks()[0];window.__mic=s.getAudioTracks()[0]}')
@@ -80,6 +81,11 @@ with tempfile.TemporaryDirectory(prefix='swr-audio-') as folder, sync_playwright
             'guestConn':guest.locator('#connection').inner_text(),
             'guestDevWarn':guest.locator('#devWarn').inner_text(),
             'hostTiles':[host.locator('#backstage .tile').nth(i).get_attribute('data-id') for i in range(host.locator('#backstage .tile').count())],
+            'guestToastLog':guest.evaluate('window.__toastLog||[]'),
+            'guestRejects':guest.evaluate('window.__reject||[]'),
+            'hostToastLog':host.evaluate('window.__toastLog||[]'),
+            'hostRejects':host.evaluate('window.__reject||[]'),
+            'guestBody':guest.locator('body').inner_text()[:400],
         }),flush=True)
         raise
     guest_id=host.locator('#backstage .tile:not([data-id="host-camera"])').get_attribute('data-id')
