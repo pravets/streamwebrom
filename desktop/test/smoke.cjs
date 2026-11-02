@@ -19,7 +19,7 @@ const http=require('node:http');const path=require('node:path');const assert=req
     assert.equal(await room.evaluate(()=>window.StreamWebRomCapture.version),1);
     await assert.rejects(room.evaluate(()=>window.StreamWebRomCapture.start('not-authorized')));
     step('select source');await room.locator('#addScreen').click();
-    let picker;await expect.poll(()=>{picker=app.windows().find(p=>p.url().endsWith('/picker.html'));return !!picker},{timeout:15000}).toBe(true);
+    let picker;await expect.poll(()=>{picker=app.windows().find(p=>p.url().includes('/picker.html'));return !!picker},{timeout:15000}).toBe(true);
     await expect(picker.locator('#audio option[value="application"]')).toBeEnabled();
     await picker.locator('[data-type="browser"]').click();
     await picker.locator('#contentURL').fill('http://127.0.0.1:'+content.address().port);
