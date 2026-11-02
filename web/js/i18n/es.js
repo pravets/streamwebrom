@@ -9,7 +9,8 @@ import { es as diagnostics } from "./es/diagnostics.js";
 import { es as pages } from "./es/pages.js";
 import { es as misc } from "./es/misc.js";
 import { es as server } from "./es/server.js";
+import { es as stickers } from "./es/stickers.js";
 
 export const es = {
-  ...common, ...studio, ...studiojs, ...guest, ...home, ...devices, ...effects, ...diagnostics, ...pages, ...misc, ...server,
+  ...common, ...studio, ...studiojs, ...guest, ...home, ...devices, ...effects, ...diagnostics, ...pages, ...misc, ...server, ...stickers,
 };

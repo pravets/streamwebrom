@@ -25,7 +25,7 @@ public sealed class ServerProcess : IDisposable
             // Development build: look next to the launcher.
             var side = Path.Combine(AppContext.BaseDirectory, "streamwebrom.exe");
             if (File.Exists(side)) return side;
-            throw new FileNotFoundException("streamwebrom.exe no está incluido en este build.");
+            throw new FileNotFoundException(Lang.T("error.serverNotIncluded"));
         }
         // Only rewrite when the embedded binary changed (keeps Windows Firewall rule valid).
         // Compare content, not just size: two builds can have the same length.

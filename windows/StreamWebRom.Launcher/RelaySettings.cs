@@ -29,7 +29,7 @@ public sealed class RelaySettings
     public static RelaySettings Load()
     {
         if (!File.Exists(FileName)) return new();
-        return JsonSerializer.Deserialize<RelaySettings>(File.ReadAllText(FileName)) ?? throw new InvalidDataException("Configuración TURN inválida");
+        return JsonSerializer.Deserialize<RelaySettings>(File.ReadAllText(FileName)) ?? throw new InvalidDataException(Lang.T("error.invalidTurnConfig"));
     }
     public void Save()
     {
@@ -44,7 +44,7 @@ public sealed class RelaySettings
     {
         if (!Enabled) return;
         if (!System.Net.IPAddress.TryParse(PublicIp, out var ip) || ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || udpPort < 1)
-            throw new InvalidDataException("TURN local requiere IP pública IPv4 y puerto UDP de medios fijo.");
+            throw new InvalidDataException(Lang.T("error.localTurnRequires"));
         if (string.IsNullOrEmpty(LocalSecretProtected)) { LocalSecretProtected = Encrypt(Convert.ToHexString(RandomNumberGenerator.GetBytes(32))); Save(); }
         psi.Environment["SWR_RELAY_LISTEN"] = Listen;
         psi.Environment["SWR_RELAY_TCP_ALTERNATE"] = TcpAlternate;
@@ -55,7 +55,7 @@ public sealed class RelaySettings
         psi.Environment["SWR_RELAY_SECRET"] = Decrypt(LocalSecretProtected);
         if (!CloudflareEnabled) return;
         if (string.IsNullOrWhiteSpace(CloudflareAccount) || string.IsNullOrWhiteSpace(CloudflareTurnKeyId) || string.IsNullOrWhiteSpace(CloudflareTurnKeyProtected) || string.IsNullOrWhiteSpace(CloudflareAnalyticsTokenProtected))
-            throw new InvalidDataException("Completa los identificadores y ambos tokens de Cloudflare.");
+            throw new InvalidDataException(Lang.T("error.cloudflareCredentials"));
         psi.Environment["SWR_CF_ACCOUNT"] = CloudflareAccount;
         psi.Environment["SWR_CF_TURN_KEY_ID"] = CloudflareTurnKeyId;
         psi.Environment["SWR_CF_TURN_KEY_TOKEN"] = Decrypt(CloudflareTurnKeyProtected);

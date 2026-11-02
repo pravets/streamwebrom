@@ -25,7 +25,7 @@ public sealed class Tunnel : IDisposable
             var side = Path.Combine(dir, "cloudflared.exe");
             if (File.Exists(side)) { File.Copy(side, Exe, true); return; }
         }
-        Output?.Invoke("Descargando cloudflared (una sola vez)…");
+        Output?.Invoke(Lang.T("tunnel.downloading"));
         Directory.CreateDirectory(ServerProcess.DataDir);
         using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("StreamWebRom-Launcher");
@@ -34,13 +34,13 @@ public sealed class Tunnel : IDisposable
         await using (var dst = File.Create(tmp))
             await src.CopyToAsync(dst);
         File.Move(tmp, Exe, true);
-        Output?.Invoke("cloudflared listo.");
+        Output?.Invoke(Lang.T("tunnel.ready"));
     }
 
     public async Task StartAsync(string token)
     {
         if (Running) return;
-        if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("Falta el token del túnel de Cloudflare.");
+        if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException(Lang.T("error.tunnelTokenMissing"));
         await EnsureCloudflaredAsync();
         var psi = new ProcessStartInfo(Exe)
         {
@@ -54,8 +54,8 @@ public sealed class Tunnel : IDisposable
         // Passed by environment, not argv, so it never shows up in process listings.
         psi.Environment["TUNNEL_TOKEN"] = token.Trim();
         _proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        _proc.OutputDataReceived += (_, e) => { if (e.Data != null) Output?.Invoke("[túnel] " + e.Data); };
-        _proc.ErrorDataReceived += (_, e) => { if (e.Data != null) Output?.Invoke("[túnel] " + e.Data); };
+        _proc.OutputDataReceived += (_, e) => { if (e.Data != null) Output?.Invoke(Lang.T("log.tunnelPrefix") + e.Data); };
+        _proc.ErrorDataReceived += (_, e) => { if (e.Data != null) Output?.Invoke(Lang.T("log.tunnelPrefix") + e.Data); };
         _proc.Start();
         _proc.BeginOutputReadLine();
         _proc.BeginErrorReadLine();

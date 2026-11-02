@@ -1,0 +1,18 @@
+export const es = {
+  "stickers.hola": "¡Hola!",
+  "stickers.bienvenidos": "¡Bienvenidos!",
+  "stickers.gracias": "¡Gracias!",
+  "stickers.aplausos": "¡Aplausos!",
+  "stickers.jaja": "¡Jajaja!",
+  "stickers.fuego": "¡Fuego!",
+  "stickers.wow": "¡Wow!",
+  "stickers.encanta": "¡Me encanta!",
+  "stickers.gg": "GG",
+  "stickers.like": "¡Like!",
+  "stickers.pregunta": "Tengo una pregunta",
+  "stickers.felicidades": "¡Felicidades!",
+  "stickers.envivo": "EN VIVO",
+  "stickers.saludos": "¡Saludos!",
+  "stickers.cafe": "Pausa café",
+  "stickers.yavuelvo": "Ya vuelvo",
+};

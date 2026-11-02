@@ -7,6 +7,15 @@ const {NativeBackend}=require('./native-backend.cjs');
 let native=null;
 if(process.platform==='win32')try{native=require('./vendor/native-audio/build/Release/electron_native_screenshare.node')}catch(e){console.error('Native audio could not load:',e.message)}
 const testMode=process.argv.includes('--capture-test');
+// The capture shell follows the operating system language; the pages keep the
+// Spanish text inline as the fallback and read ?lang= from this query.
+const SHELL_TEXT={
+  es:{selectionEnded:'La selección terminó',refreshList:'Actualiza la lista y elige una fuente disponible'},
+  en:{selectionEnded:'The selection ended',refreshList:'Refresh the list and pick an available source'},
+  ru:{selectionEnded:'Выбор завершён',refreshList:'Обновите список и выберите доступный источник'},
+};
+function shellLang(){const tag=String(app.getLocale()||'es').toLowerCase();return tag.indexOf('ru')===0?'ru':tag.indexOf('en')===0?'en':'es'}
+function shellText(key){const lang=SHELL_TEXT[shellLang()]||SHELL_TEXT.es;return lang[key]||SHELL_TEXT.es[key]}
 let main=null,home=null,origin='',picker=null,pendingPicker=null,preferences={},blocker=null;
 const contents=new Map();
 const backend=new NativeBackend();
@@ -51,7 +60,7 @@ function showPicker(request,callback){
   picker=new BrowserWindow({parent:main,width:840,height:700,minWidth:560,minHeight:450,modal:true,title:'Compartir · StreamWebRom',webPreferences:opts('picker-preload.cjs')});
   picker.setMenu(null);
   picker.on('closed',()=>{picker=null;const old=pendingPicker;pendingPicker=null;if(old)old.callback(null)});
-  picker.loadFile('picker.html');
+  picker.loadFile('picker.html',{query:{lang:shellLang()}});
 }
 function createRoom(value){
   const u=serverURL(value);origin=u.origin;
@@ -75,21 +84,21 @@ function createRoom(value){
 }
 function showHome(){
   home=new BrowserWindow({width:800,height:620,title:'StreamWebRom · Captura avanzada',webPreferences:opts('home-preload.cjs')});
-  home.setMenu(null);home.loadFile('home.html');
+  home.setMenu(null);home.loadFile('home.html',{query:{lang:shellLang()}});
 }
 ipcMain.handle('app:connect',(e,url)=>{localEvent(e,home,'home.html');createRoom(url);home.close();home=null;return true});
 ipcMain.handle('capture:preferences',(e,value)=>{roomEvent(e);preferences={theme:value?.theme==='light'?'light':'dark'};return true});
 ipcMain.handle('picker:load',async e=>{
-  localEvent(e,picker,'picker.html');const current=pendingPicker;if(!current)throw new Error('La selección terminó');
-  const list=await sourceList();if(pendingPicker!==current)throw new Error('La selección terminó');
+  localEvent(e,picker,'picker.html');const current=pendingPicker;if(!current)throw new Error(shellText('selectionEnded'));
+  const list=await sourceList();if(pendingPicker!==current)throw new Error(shellText('selectionEnded'));
   current.sources=new Map(list.map(s=>[s.id,s]));
   return {theme:preferences.theme,nativeAudio:!!native,sources:list.map(s=>({id:s.id,kind:s.kind,name:s.name,thumbnail:s.thumbnail?.toDataURL?.()||''}))};
 });
 ipcMain.handle('picker:content',async(e,url)=>{localEvent(e,picker,'picker.html');return openContent(url)});
 ipcMain.on('picker:cancel',e=>{localEvent(e,picker,'picker.html');closePicker()});
 ipcMain.handle('picker:choose',async(e,choice)=>{
-  localEvent(e,picker,'picker.html');const current=pendingPicker;if(!current)throw new Error('La selección terminó');
-  const source=current.sources.get(choice?.id);if(!source)throw new Error('Actualiza la lista y elige una fuente disponible');
+  localEvent(e,picker,'picker.html');const current=pendingPicker;if(!current)throw new Error(shellText('selectionEnded'));
+  const source=current.sources.get(choice?.id);if(!source)throw new Error(shellText('refreshList'));
   let pid=0;
   if(source.kind==='window'&&choice.audio==='application'&&native)pid=native.getPidFromHwnd(Number(source.id.split(':')[1]));
   const plan=audioPlan({...source,pid},current.request.audioRequested?choice.audio:'none',process.pid);
@@ -113,7 +122,7 @@ ipcMain.handle('capture:start',async(e,id)=>{
       if(!authorized||s.frames>=6||!meta.isFloat||meta.bitsPerSample!==32||meta.channels!==2||meta.sampleRate!==48000||pcm.byteLength>384000||pcm.byteLength%8){backend.ack();return}
       s.frames++;s.owner.send('capture:audio',{id:s.id,rate:48000,channels:2,pcm});
     },()=>{if(lease.current===s){s.owner.send('capture:error',{id:s.id,message:'La fuente de audio se detuvo. Vuelve a elegir qué compartir.'});lease.clear(s.id)}});
-    if(lease.current!==s){backend.stop();throw new Error('La selección terminó')}
+    if(lease.current!==s){backend.stop();throw new Error(shellText('selectionEnded'))}
     blocker=powerSaveBlocker.start('prevent-app-suspension');return true;
   }catch(error){console.error('Native capture:',error.message);lease.clear(id);throw new Error('Windows no permitió capturar el audio. Elige otra aplicación o Sin audio.')}
 });

@@ -11,7 +11,7 @@ internal static class Program
         using var mutex = new Mutex(true, "StreamWebRom.Launcher.SingleInstance", out var first);
         if (!first)
         {
-            MessageBox.Show("StreamWebRom ya está abierto (revisa la bandeja del sistema).", "StreamWebRom",
+            MessageBox.Show(Lang.T("program.alreadyRunning"), "StreamWebRom",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }

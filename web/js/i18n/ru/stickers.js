@@ -1,0 +1,18 @@
+export const ru = {
+  "stickers.hola": "Привет!",
+  "stickers.bienvenidos": "Добро пожаловать!",
+  "stickers.gracias": "Спасибо!",
+  "stickers.aplausos": "Аплодисменты!",
+  "stickers.jaja": "Ахаха!",
+  "stickers.fuego": "Огонь!",
+  "stickers.wow": "Вау!",
+  "stickers.encanta": "Обожаю!",
+  "stickers.gg": "GG",
+  "stickers.like": "Лайк!",
+  "stickers.pregunta": "У меня вопрос",
+  "stickers.felicidades": "Поздравляю!",
+  "stickers.envivo": "В ЭФИРЕ",
+  "stickers.saludos": "Привет всем!",
+  "stickers.cafe": "Кофе-брейк",
+  "stickers.yavuelvo": "Скоро вернусь",
+};

@@ -9,7 +9,8 @@ import { en as diagnostics } from "./en/diagnostics.js";
 import { en as pages } from "./en/pages.js";
 import { en as misc } from "./en/misc.js";
 import { en as server } from "./en/server.js";
+import { en as stickers } from "./en/stickers.js";
 
 export const en = {
-  ...common, ...studio, ...studiojs, ...guest, ...home, ...devices, ...effects, ...diagnostics, ...pages, ...misc, ...server,
+  ...common, ...studio, ...studiojs, ...guest, ...home, ...devices, ...effects, ...diagnostics, ...pages, ...misc, ...server, ...stickers,
 };
