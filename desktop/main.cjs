@@ -10,9 +10,9 @@ const testMode=process.argv.includes('--capture-test');
 // The capture shell follows the operating system language; the pages keep the
 // Spanish text inline as the fallback and read ?lang= from this query.
 const SHELL_TEXT={
-  es:{selectionEnded:'La selección terminó',refreshList:'Actualiza la lista y elige una fuente disponible'},
-  en:{selectionEnded:'The selection ended',refreshList:'Refresh the list and pick an available source'},
-  ru:{selectionEnded:'Выбор завершён',refreshList:'Обновите список и выберите доступный источник'},
+  es:{selectionEnded:'La selección terminó',refreshList:'Actualiza la lista y elige una fuente disponible',invalidRequest:'Solicitud no válida'},
+  en:{selectionEnded:'The selection ended',refreshList:'Refresh the list and pick an available source',invalidRequest:'Invalid request'},
+  ru:{selectionEnded:'Выбор завершён',refreshList:'Обновите список и выберите доступный источник',invalidRequest:'Некорректный запрос'},
 };
 function shellLang(){const tag=String(app.getLocale()||'es').toLowerCase();return tag.indexOf('ru')===0?'ru':tag.indexOf('en')===0?'en':'es'}
 function shellText(key){const lang=SHELL_TEXT[shellLang()]||SHELL_TEXT.es;return lang[key]||SHELL_TEXT.es[key]}
@@ -23,7 +23,13 @@ const lease=new CaptureLease(()=>{backend.stop();if(blocker!==null){powerSaveBlo
 const opts=preload=>({contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,backgroundThrottling:false,preload:path.join(__dirname,preload)});
 function safeOpen(url){try{if(new URL(url).protocol==='https:')shell.openExternal(url)}catch{}}
 function roomEvent(e){if(!trustedFrame(e,main?.webContents,origin))throw new Error('La captura solo está disponible en la sala abierta');}
-function localEvent(e,win,file){if(!win||win.isDestroyed()||e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||e.senderFrame.url!==pathToFileURL(path.join(__dirname,file)).href)throw new Error('Solicitud no válida');}
+function localEvent(e,win,file){
+  if(!win||win.isDestroyed()||e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame)throw new Error(shellText('invalidRequest'));
+  const expected=pathToFileURL(path.join(__dirname,file));let actual;
+  try{actual=new URL(e.senderFrame.url)}catch{throw new Error(shellText('invalidRequest'))}
+  // The language travels as ?lang=, so compare the path and not the whole URL.
+  if(actual.protocol!==expected.protocol||actual.pathname!==expected.pathname)throw new Error(shellText('invalidRequest'));
+}
 function closePicker(){const pending=pendingPicker;pendingPicker=null;if(pending)pending.callback(null);if(picker&&!picker.isDestroyed())picker.close();picker=null;}
 function stopAll(){closePicker();lease.clear();}
 function nativeWindowID(win){try{const b=win.getNativeWindowHandle();return (b.length>=8?b.readBigUInt64LE():BigInt(b.readUInt32LE())).toString()}catch{return ''}}
