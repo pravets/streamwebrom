@@ -41,7 +41,7 @@ const off = (...names) => names.some((n) => params.has(n) && ["0", "false", "off
 export function loadPrefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch {}
-  p = { camera: "", mic: "", speaker: "", quality: "720", fps: "30", echo: true, denoise: true, autogain: true, stereo: false, mirror: true, gain: 100, codec: "", effect: "none", effectPreset: "", flipH: false, flipV: false, ...p };
+  p = { camera: "", mic: "", speaker: "", quality: "720", fps: "30", echo: true, denoise: true, autogain: true, stereo: false, mirror: true, gain: 100, codec: "", effect: "none", effectPreset: "", effectStrength: 50, flipH: false, flipV: false, ...p };
   const g = (n) => params.get(n);
   // &quality=0/1/2 (VDO) or a height
   if (params.has("quality")) p.quality = ({ 0: "1080", 1: "720", 2: "360" })[g("quality")] || g("quality");
@@ -65,6 +65,12 @@ export function loadPrefs() {
   // &effects=blur|blur-strong|bg|replace|none (VDO.Ninja: &effects / &blur) and &bgpreset=green|studio|...
   if (g("effects") || g("effect")) p.effect = ({ 0: "none", 1: "blur", 2: "blur", 3: "blur-strong", 4: "bg", 5: "bg" })[g("effects") || g("effect")] || g("effects") || g("effect");
   if (params.has("blur")) p.effect = "blur";
+  // &pixelate + &strength=0..100 (or &blurstrength): whole-frame filters.
+  if (params.has("pixelate")) p.effect = "pixelate";
+  if (g("strength") || g("blurstrength")) {
+    const value = Number(g("strength") || g("blurstrength"));
+    if (Number.isFinite(value)) p.effectStrength = Math.min(100, Math.max(0, value));
+  }
   if (g("bgpreset")) { p.effect = "bg"; p.effectPreset = g("bgpreset"); }
   if (g("gain")) p.gain = Math.max(0, Math.min(400, Number(g("gain")) || 100));
   return p;
@@ -298,7 +304,7 @@ export async function renderPanel(root, prefs, onChange, opts = {}) {
     el("div", {}, el("label", {}, el("span", tx("devices.micGain")), " ", gainLbl), gain),
     spk ? el("div", {}, el("label", tx("devices.speakers", { for: "dev-spk" })), el("div", { class: "row" }, spk, test)) :
       el("p", { class: "muted", style: "margin:0;font-size:12px" }, el("span", tx("devices.outputSystemOnly"))),
-    opts.effects !== false ? effectsPanel(prefs, (what) => { savePrefs(prefs); onChange(prefs, what); }) : null,
+    opts.effects !== false ? effectsPanel(prefs, (what) => { savePrefs(prefs); onChange(prefs, what); }, () => savePrefs(prefs)) : null,
     el("details", {}, el("summary", tx("devices.advanced")),
       el("div", { class: "col", style: "margin-top:8px" },
         chk("dev-echo", "devices.echo", prefs.echo),

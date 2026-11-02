@@ -29,4 +29,7 @@ export const es = {
   "effects.summary": "✨ Efectos de video (fondo virtual, desenfoque, imagen)",
   "effects.effect": "Efecto",
   "effects.note": "El recorte se procesa en un worker de tu equipo sin acumular fotogramas. Si el equipo se sobrecarga se prioriza video reciente. Para usar filtros de OBS, selecciona OBS Virtual Camera como cámara y deja este efecto desactivado.",
+  "effects.fillBlur": "Desenfoque de todo el video",
+  "effects.pixelate": "Pixelado",
+  "effects.strength": "Intensidad",
 };
