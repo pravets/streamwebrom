@@ -525,7 +525,7 @@ func (r *Room) history() []Comment {
 	return append([]Comment(nil), r.chat...)
 }
 
-var errFull = errors.New("room is full")
+var errFull = Userf("room_full", "room is full")
 
 // maxPasses bounds the rejoin passes a room remembers.
 const maxPasses = 1000

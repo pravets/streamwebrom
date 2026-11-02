@@ -2,7 +2,7 @@
 // One WebSocket per page; one RTCPeerConnection per published or received stream
 // (no renegotiation dance, which is the #1 source of flakiness in mesh apps).
 import { senderProfile } from "./bandwidth.js";
-import { t } from "./i18n.js";
+import { t, has } from "./i18n.js";
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -65,12 +65,23 @@ export function writeStored(key, value, session = false) {
   catch { return false; }
 }
 
+// Server replies carry a stable code next to the Spanish text; the browser
+// shows the visitor's language when it knows the code and the raw text when a
+// newer server sends one this build does not have yet.
+export function serverError(message) {
+  const code = message && message.code;
+  const key = code ? "server." + code : "";
+  if (key && has(key)) return t(key);
+  if (message && typeof message === "object") return message.error || "";
+  return String(message || "");
+}
+
 export async function api(path, body) {
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 20000);
   try {
     const r = await fetch(path, { ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}), signal: controller.signal });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (!r.ok) throw new Error(serverError(data) || r.statusText);
     return data;
   } finally { clearTimeout(timer); }
 }
@@ -144,7 +155,7 @@ export class Signal extends EventTarget {
         if (m.type === "waiting") { this.cancelJoin = null; clearTimeout(deadline); welcomed = true; this.ready = true; this.everWelcomed = true; resolve(m); }
         if (m.type === "error" && !welcomed && !m.reqId) {
           // Authentication failure is terminal, including after a reconnect.
-          terminal = true; reject(new Error(m.error)); ws.close();
+          terminal = true; reject(new Error(serverError(m))); ws.close();
         }
         if (m.type === "kicked" || m.type === "denied") {
           this.closed = true;
@@ -155,7 +166,7 @@ export class Signal extends EventTarget {
           const p = this.pending.get(m.reqId);
           this.pending.delete(m.reqId);
           clearTimeout(p.timer);
-          m.type === "error" ? p.reject(new Error(m.error)) : p.resolve(m);
+          m.type === "error" ? p.reject(new Error(serverError(m))) : p.resolve(m);
           if (m.type !== "offer") return;
         }
         this.dispatchEvent(new CustomEvent(m.type, { detail: m }));

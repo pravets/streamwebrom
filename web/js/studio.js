@@ -11,6 +11,7 @@ import { screenAudioNotice, stopScreenCapture } from "./devices.js";
 import { chooseScreen } from "./screen-share.js";
 import { RoomAudio } from "./room-audio.js";
 import { installI18n, t, onLangChange } from "./i18n.js";
+import { serverError } from "./rtc.js";
 
 // Every UI string in this module lives under the "studiojs" i18n area.
 installI18n();
@@ -221,7 +222,7 @@ sig.on("knock", (m) => addKnock(m));
 sig.on("knock-cancel", (m) => { if (knocks.delete(m.peerId)) { renderKnocks(); if (m.action !== "admitted") toast(t("studiojs.guestLeftLobby")); } });
 sig.on("reaction", (m) => flyReaction(m.text));
 sig.on("restream", (m) => { const r = m.state.restream; $("#restreamStats").textContent = r ? (r.stats || "") + (r.lastError ? " · " + r.lastError : "") : ""; });
-sig.on("error", (m) => toast(m.error, "err"));
+sig.on("error", (m) => toast(serverError(m), "err"));
 
 async function addRemote(id, kind, owner, name, revision) {
   if (local.has(id) || kind === "program") return;
@@ -1108,7 +1109,7 @@ function renderPersistence(info, restore = false) {
 sig.on("persistence",m=>renderPersistence(m.persistence));
 async function saveRoomOptions(action="") {
   const response=await fetch(`/api/rooms/${encodeURIComponent(room)}/persistence${action === "options" ? "?auto=1" : ""}`,{method:"POST",signal:AbortSignal.timeout(20000),headers:{"Content-Type":"application/json",Authorization:"Bearer "+hostKey},body:JSON.stringify({days:Number($("#persistDays").value),options:roomOptions()})});
-  const result=await response.json(); if (!response.ok) throw new Error(result.error || "No se pudo guardar la sala");
+  const result=await response.json(); if (!response.ok) throw new Error(serverError(result) || t("server.room_save_failed"));
   renderPersistence(result);
 }
 $("#persistSave").onclick=async()=>{

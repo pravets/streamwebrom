@@ -8,7 +8,8 @@ import { ru as effects } from "./ru/effects.js";
 import { ru as diagnostics } from "./ru/diagnostics.js";
 import { ru as pages } from "./ru/pages.js";
 import { ru as misc } from "./ru/misc.js";
+import { ru as server } from "./ru/server.js";
 
 export const ru = {
-  ...common, ...studio, ...studiojs, ...guest, ...home, ...devices, ...effects, ...diagnostics, ...pages, ...misc,
+  ...common, ...studio, ...studiojs, ...guest, ...home, ...devices, ...effects, ...diagnostics, ...pages, ...misc, ...server,
 };

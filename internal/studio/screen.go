@@ -1,8 +1,6 @@
 package studio
 
 import (
-	"errors"
-
 	"github.com/webr0m/streamwebrom/internal/sfu"
 )
 
@@ -33,7 +31,7 @@ func (h *Hub) requestScreen(p *Peer, m Msg) error {
 	r.mu.Lock()
 	if p.role() != RoleGuest || r.peers[p.ID] != p || !r.onStageLocked(p) {
 		r.mu.Unlock()
-		return errors.New("Debes estar en el escenario para solicitar compartir pantalla")
+		return Userf("screen_share_not_on_stage", "Debes estar en el escenario para solicitar compartir pantalla")
 	}
 	p.mu.Lock()
 	action := "pending"
@@ -54,7 +52,7 @@ func (h *Hub) allowScreen(p *Peer) error {
 	r.mu.Lock()
 	if p.role() != RoleGuest || r.peers[p.ID] != p || !r.onStageLocked(p) {
 		r.mu.Unlock()
-		return errors.New("El invitado debe estar en el escenario para autorizar su pantalla")
+		return Userf("screen_share_guest_not_on_stage", "El invitado debe estar en el escenario para autorizar su pantalla")
 	}
 	p.mu.Lock()
 	if !p.screenAllowed {

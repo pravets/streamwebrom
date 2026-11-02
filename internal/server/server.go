@@ -252,6 +252,16 @@ func (s *Server) pages(files http.Handler) http.Handler {
 	})
 }
 
+// errorJSON keeps the Spanish text every client already reads and adds the
+// stable code the browser translates; internal failures simply carry no code.
+func errorJSON(text, code string) map[string]any {
+	out := map[string]any{"error": text}
+	if code != "" {
+		out["code"] = code
+	}
+	return out
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -329,23 +339,23 @@ type createReq struct {
 
 func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	if !s.allowCreate(ClientIP(r)) {
-		writeJSON(w, 429, map[string]string{"error": "demasiadas salas creadas, espera un momento"})
+		writeJSON(w, 429, errorJSON("demasiadas salas creadas, espera un momento", "rooms_rate_limited"))
 		return
 	}
 	var req createReq
 	r.Body = http.MaxBytesReader(w, r.Body, 8192)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		writeJSON(w, 400, map[string]string{"error": "bad json"})
+		writeJSON(w, 400, errorJSON("bad json", "bad_json"))
 		return
 	}
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
-		writeJSON(w, 400, map[string]string{"error": "body must contain one JSON object (max 8192 bytes)"})
+		writeJSON(w, 400, errorJSON("body must contain one JSON object (max 8192 bytes)", "bad_body"))
 		return
 	}
 	keys, err := s.hub.CreateRoom(req.Room, req.Password, req.Title, req.Lobby)
 	if err != nil {
-		writeJSON(w, 409, map[string]string{"error": err.Error()})
+		writeJSON(w, 409, errorJSON(err.Error(), studio.CodeOf(err)))
 		return
 	}
 	writeJSON(w, 201, keys)
@@ -357,17 +367,17 @@ func (s *Server) saveRoom(w http.ResponseWriter, r *http.Request) {
 	room := s.hub.Room(r.PathValue("room"))
 	key := bearer(r)
 	if room == nil || !room.CheckHost(key) {
-		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+		writeJSON(w, 401, errorJSON("unauthorized", "unauthorized"))
 		return
 	}
 	value, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 6<<20))
 	if err != nil {
-		writeJSON(w, 413, map[string]string{"error": "Ajustes demasiado grandes (máximo 6 MB)"})
+		writeJSON(w, 413, errorJSON("Ajustes demasiado grandes (máximo 6 MB)", "settings_too_large"))
 		return
 	}
 	info, err := s.hub.SaveRoom(room.ID, key, value, r.URL.Query().Get("auto") == "1")
 	if err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		writeJSON(w, 400, errorJSON(err.Error(), studio.CodeOf(err)))
 		return
 	}
 	writeJSON(w, 200, info)
@@ -376,7 +386,7 @@ func (s *Server) saveRoom(w http.ResponseWriter, r *http.Request) {
 func (s *Server) roomInfo(w http.ResponseWriter, r *http.Request) {
 	room := s.hub.Room(r.PathValue("room"))
 	if room == nil {
-		writeJSON(w, 404, map[string]string{"error": "room not found"})
+		writeJSON(w, 404, errorJSON("room not found", "room_not_found"))
 		return
 	}
 	st := room.Snapshot()
