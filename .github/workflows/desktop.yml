@@ -1,7 +1,7 @@
 name: desktop
 on:
   push:
-    branches: [main, codex/native-capture]
+    branches: [master, codex/native-capture]
     tags: ['v*']
   pull_request:
 permissions:
