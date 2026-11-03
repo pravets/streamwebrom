@@ -244,4 +244,7 @@ export const ru = {
   "studiojs.sourceCount": { one: "{n} источник", few: "{n} источника", many: "{n} источников" },
   "studiojs.fileTooLarge": "файл слишком большой (макс. {max} КБ)",
   "studiojs.restoreDeviceFailed": "Не удалось восстановить устройство: {error}",
+  "studiojs.accentNeedsScene": "Сначала добавьте источник в сцену {n}",
+  "studiojs.accentNeedsLayout": "В этой раскладке нет акцентного места: выберите «Акцент», PiP, «Сбоку» или «Соло»",
+  "studiojs.accentNeedsProgram": "Сначала выведите источник на сцену",
 };

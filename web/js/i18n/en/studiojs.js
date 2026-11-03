@@ -244,4 +244,7 @@ export const en = {
   "studiojs.sourceCount": { one: "{n} source", other: "{n} sources" },
   "studiojs.fileTooLarge": "file too large (max {max} KB)",
   "studiojs.restoreDeviceFailed": "The device could not be restored: {error}",
+  "studiojs.accentNeedsScene": "Add the source to scene {n} before featuring it",
+  "studiojs.accentNeedsLayout": "This layout has no spotlight slot: pick Spotlight, PiP, Sidebar or Solo",
+  "studiojs.accentNeedsProgram": "Put the source on stage before featuring it",
 };

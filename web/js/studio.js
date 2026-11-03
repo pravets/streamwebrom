@@ -4,7 +4,7 @@ import { roomTelemetry, metricText } from "./telemetry.js";
 import { relayMonitor } from "./relay-status.js";
 import { mountVdo } from "./vdo.js";
 import { immersive } from "./immersive.js";
-import { Compositor, AudioMixer } from "./compositor.js";
+import { Compositor, AudioMixer, accentApplies, ACCENT_LAYOUTS } from "./compositor.js";
 import { chatMessage, appendChat, mountComposer } from "./chat.js";
 import { listDevices, loadPrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain, QUALITIES, FPS } from "./devices.js";
 import { screenAudioNotice, stopScreenCapture } from "./devices.js";
@@ -506,6 +506,24 @@ $("#sourceSettings").addEventListener("close", () => {
   $("#sourceSettingsVideo").pause(); $("#sourceSettingsVideo").srcObject = null;
   document.querySelector(`#backstage [data-id="${CSS.escape(id)}"] .source-options`)?.focus();
 });
+// The accent only has a slot in some layouts and only for sources that are
+// already in this scene's line-up: say why instead of offering a silent no-op.
+function accentButton(id) {
+  const scene = sceneOf(editScene);
+  const active = scene.featured === id;
+  const inStage = scene.stage.includes(id);
+  const supported = ACCENT_LAYOUTS.includes(scene.layout);
+  const why = !inStage ? t(editScene === "1" ? "studiojs.accentNeedsProgram" : "studiojs.accentNeedsScene", { n: editScene })
+    : !supported ? t("studiojs.accentNeedsLayout")
+    : "";
+  return el("button", {
+    text: active ? t("studiojs.unsetFeatured") : t("studiojs.setFeatured"),
+    title: why,
+    disabled: !active && !!why,
+    onclick: () => setScene(editScene, { featured: active ? "" : id }),
+  });
+}
+
 function renderSourceSettings() {
   if (!sourceSettingsId) return;
   const id = sourceSettingsId, s = sources.get(id), dlg = $("#sourceSettings");
@@ -518,7 +536,7 @@ function renderSourceSettings() {
   const button = (text, action, attrs = {}) => el("button", { text, onclick: action, ...attrs });
   const actions = [
     button(onStage(id) ? t("studiojs.removeFromStage") : t("studiojs.addToStage"), () => toggleStage(id)),
-    button(sceneOf(editScene).featured === id ? t("studiojs.unsetFeatured") : t("studiojs.setFeatured"), () => setScene(editScene, { featured: sceneOf(editScene).featured === id ? "" : id })),
+    accentButton(id),
     button(muted ? t("studiojs.unmuteProgram") : t("studiojs.muteProgram"), () => toggleMap("muted", id)),
     button(hidden ? t("studiojs.showVideo") : t("studiojs.hideVideo"), () => toggleMap("hidden", id), { title: hidden ? t("studiojs.showVideo") : t("studiojs.hideVideoTitle") }),
     button(t("studiojs.copyObsLink"), () => keys.viewKey ? copy(obsURL(id)) : toast(t("studiojs.connectingYet"), "err")),

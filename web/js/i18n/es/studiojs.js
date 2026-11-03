@@ -244,4 +244,7 @@ export const es = {
   "studiojs.sourceCount": { one: "{n} fuente", other: "{n} fuentes" },
   "studiojs.fileTooLarge": "archivo muy grande (máx {max} KB)",
   "studiojs.restoreDeviceFailed": "No se pudo recuperar el dispositivo: {error}",
+  "studiojs.accentNeedsScene": "Añade la fuente a la escena {n} para poder destacarla",
+  "studiojs.accentNeedsLayout": "Este diseño no tiene hueco para el destacado: elige Destacado, PiP, Lateral o Solo",
+  "studiojs.accentNeedsProgram": "Pasa la fuente al escenario para poder destacarla",
 };

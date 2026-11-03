@@ -8,6 +8,14 @@ import { stickerById } from "./stickers.js";
 
 export const W = 1920, H = 1080;
 
+// Layouts with a slot that the featured source takes over. `featured` only has
+// meaning for a source that is already in that scene's line-up: accenting
+// someone who was never added to the scene must stay a no-op.
+export const ACCENT_LAYOUTS = ["pip", "sidebar", "spotlight", "solo"];
+export function accentApplies(layout, stage, featured) {
+  return !!featured && ACCENT_LAYOUTS.includes(layout) && (stage || []).includes(featured);
+}
+
 /** Returns rectangles [{x,y,w,h}] for n tiles. */
 export function computeLayout(layout, n, opts = {}) {
   const pad = opts.pad ?? 24, gap = opts.gap ?? 16, bottom = opts.bottom ?? 0;
@@ -175,7 +183,7 @@ export class Compositor {
     if (layout === "screen") {
       const screens = stage.filter((id) => this.sources.get(id).kind === "screen");
       stage = [...screens, ...stage.filter((id) => !screens.includes(id))];
-    } else if (st.featured && stage.includes(st.featured) && ["pip", "sidebar", "spotlight", "solo"].includes(layout)) {
+    } else if (accentApplies(layout, stage, st.featured)) {
       stage = [st.featured, ...stage.filter((id) => id !== st.featured)];
     }
     if (layout === "solo") stage = stage.slice(0, 1);

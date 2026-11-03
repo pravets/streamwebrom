@@ -123,6 +123,25 @@ with sync_playwright() as pw:
     host.locator('#openRoomDialog').click()
     expect(host.locator('#persistStatus')).to_contain_text('Guardada hasta')
     host.locator('#closeRoomDialog').click()
+    # Accent: it is only offered for a source that is already in the scene, and
+    # only in layouts with a spotlight slot. Nothing is silently ignored.
+    host.locator('#sceneBar .scenecard').nth(1).click()          # scene 2 starts empty
+    host_guest.locator('.source-options').click()
+    accent=host.locator('#sourceSettingsActions button').filter(has_text='Destacar en esta escena')
+    expect(accent).to_be_disabled()
+    expect(accent).to_have_attribute('title','Añade la fuente a la escena 2 para poder destacarla')
+    host.locator('#sourceSettingsActions button').filter(has_text='Pasar al escenario').click()
+    accent=host.locator('#sourceSettingsActions button').filter(has_text='Destacar en esta escena')
+    expect(accent).to_be_disabled()                               # scene 2 still uses the grid layout
+    expect(accent).to_have_attribute('title','Este diseño no tiene hueco para el destacado: elige Destacado, PiP, Lateral o Solo')
+    host.locator('#closeSourceSettings').click()
+    host.locator('#layouts button[data-l="spotlight"]').click()
+    host_guest.locator('.source-options').click()
+    accent=host.locator('#sourceSettingsActions button').filter(has_text='Destacar en esta escena')
+    expect(accent).to_be_enabled()
+    accent.click()
+    expect(host.locator('#sourceSettingsActions button').filter(has_text='Quitar destacado')).to_be_visible()
+    host.locator('#closeSourceSettings').click()
     assert not errors,errors
-    print(json.dumps({'liveRTTAndRoomPing':True,'batteryChargingUpdates':True,'touchOrderSurvivesRotation':True,'fullScreen16by9':True,'hostStageOnly':True,'cameraSend360p':True,'obsFirstFrameMs':first_frame_ms,'obsMediaRecovers':True,'output360p720p':True,'persistentRoomRosterAndOptions':True,'hiddenBackstage':True,'pageErrors':errors}),flush=True)
+    print(json.dumps({'liveRTTAndRoomPing':True,'batteryChargingUpdates':True,'touchOrderSurvivesRotation':True,'fullScreen16by9':True,'hostStageOnly':True,'cameraSend360p':True,'obsFirstFrameMs':first_frame_ms,'obsMediaRecovers':True,'output360p720p':True,'persistentRoomRosterAndOptions':True,'hiddenBackstage':True,'accentNeedsSceneAndSlot':True,'pageErrors':errors}),flush=True)
     mobile.close();context.close();browser.close()
