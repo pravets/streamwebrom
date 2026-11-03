@@ -186,10 +186,34 @@ func (r *Recorder) Stop(room, stream string) (*Recording, error) {
 		return nil, errors.New("not recording")
 	}
 	rec.stop()
+	// The IVF writers declare 640x480 because they never look at the bitstream;
+	// fix the header before the muxer copies it into the .mkv.
+	for _, f := range rec.Files {
+		if strings.HasSuffix(f, ".ivf") {
+			_ = fixIVFSize(f, r.probe())
+		}
+	}
 	if out, err := r.mux(rec); err == nil {
 		rec.Output = out
 	}
 	return rec, nil
+}
+
+// probe returns the ffprobe binary that sits next to the configured ffmpeg.
+// Recordings are only muxed when ffmpeg exists, and ffprobe ships with it.
+func (r *Recorder) probe() string {
+	if r.FFmpeg == "" {
+		return ""
+	}
+	dir, base := filepath.Split(r.FFmpeg)
+	if !strings.Contains(base, "ffmpeg") {
+		return ""
+	}
+	candidate := filepath.Join(dir, strings.Replace(base, "ffmpeg", "ffprobe", 1))
+	if _, err := exec.LookPath(candidate); err != nil {
+		return ""
+	}
+	return candidate
 }
 
 // Active lists running recordings for a room.
