@@ -27,6 +27,8 @@ export const EFFECTS = [
   ["none", "effects.none"],
   ["blur", "effects.blur"],
   ["blur-strong", "effects.blurStrong"],
+  ["fill-blur", "effects.fillBlur"],
+  ["pixelate", "effects.pixelate"],
   ["bg", "effects.bg"],
   ["replace", "effects.replace"],
 ];
@@ -66,6 +68,9 @@ function assetFor(slot, prefs) {
 }
 
 export const effectActive = (p) => !!p.effect && p.effect !== "none";
+// Whole-frame filters take their strength from the slider (0-100, 50 by default).
+export const effectStrength = (p) => Math.min(100, Math.max(0, Number(p.effectStrength ?? 50)));
+export const strengthEffect = (mode) => mode === "fill-blur" || mode === "pixelate";
 export const needsCamera = (p) => p.effect !== "replace";
 
 // ---------- frame clock that survives background tabs ----------
@@ -153,6 +158,26 @@ export async function applyEffect(track, p) {
   let maskData = null, haveMask = false, maskAt = 0, maskInterval = 1000 / 12;
   const blurC = el("canvas"); const blurPx = mode === "blur-strong" ? 16 : 40;
   const bctx = blurC.getContext("2d");
+  // Whole-frame filters (no segmentation): the camera is drawn into a small
+  // canvas and scaled back up. The strength slider feeds prefs live, so it is
+  // read on every frame and the helper canvas is only rebuilt when it moves.
+  const softC = el("canvas"); const softCtx = softC.getContext("2d");
+  let strengthNow = -1;
+  const strengthOf = () => effectStrength(p);
+  function syncStrength() {
+    const value = strengthOf();
+    if (Math.abs(value - strengthNow) < 1) return;
+    strengthNow = value;
+    if (mode === "fill-blur") {
+      const factor = 2 + value * 0.30; // 2x at 0, 32x at 100
+      softC.width = Math.max(2, Math.round(W / factor));
+      softC.height = Math.max(2, Math.round(H / factor));
+    } else if (mode === "pixelate") {
+      const block = 2 + value * 0.46; // 2 px at 0, 48 px at 100
+      softC.width = Math.max(1, Math.round(W / block));
+      softC.height = Math.max(1, Math.round(H / block));
+    }
+  }
   const fg = el("canvas");
   const fctx = fg.getContext("2d");
   function resize(w, h) {
@@ -162,6 +187,7 @@ export async function applyEffect(track, p) {
     SH = Math.max(2, Math.round(SW * H / W));
     small.width = SW; small.height = SH;
     blurC.width = Math.max(2, Math.round(W / blurPx)); blurC.height = Math.max(2, Math.round(H / blurPx));
+    strengthNow = -1;
   }
   resize(W, H);
   let stopped = false, lastRun = 0, cost = 0, lastSeg = -Infinity, videoClock = -1;
@@ -222,6 +248,16 @@ export async function applyEffect(track, p) {
       sourceW = cam.videoWidth; sourceH = cam.videoHeight; resize(sourceW, sourceH); haveMask = false; flip();
     }
     if (mode === "none") { ctx.drawImage(cam, 0, 0, W, H); return; }
+    if (mode === "fill-blur" || mode === "pixelate") {
+      syncStrength();
+      const smooth = mode === "fill-blur";
+      softCtx.imageSmoothingEnabled = smooth;
+      softCtx.drawImage(cam, 0, 0, softC.width, softC.height);
+      ctx.imageSmoothingEnabled = smooth;
+      ctx.imageSmoothingQuality = smooth ? "high" : "low";
+      ctx.drawImage(softC, 0, 0, W, H);
+      return;
+    }
     if (client && t0 - lastSeg >= Math.max(maskInterval, (client.metrics.inferenceMs || 0) * 1.5)) {
       lastSeg = t0; sctx.drawImage(cam, 0, 0, SW, SH);
       client.submit(small, t0);
@@ -255,7 +291,7 @@ export async function applyEffect(track, p) {
 }
 
 /** The "Efectos de video" block for the settings panel. onChange() reopens the camera. */
-export function effectsPanel(prefs, onChange) {
+export function effectsPanel(prefs, onChange, persist) {
   const sel = el("select", { id: "dev-effect" }, ...EFFECTS.map(([v, key]) => opt(v, key)));
   sel.value = prefs.effect || "none";
   const preset = el("select", { id: "dev-effect-preset" }, opt("", "effects.myImageVideo"), ...PRESETS.map(([v, key]) => opt(v, key)));
@@ -268,6 +304,14 @@ export function effectsPanel(prefs, onChange) {
     // Dynamic text: rebuilt on language change through the listener below.
     info.textContent = a ? t("effects.using", { name: a.name }) : (slot === "replace" || !preset.value ? t("effects.noFileYet") : "");
   };
+  const strength = el("input", { id: "dev-effect-strength", type: "range", min: "0", max: "100", step: "1", value: String(effectStrength(prefs)), "aria-label": t("effects.strength") });
+  const strengthValue = el("span", { class: "muted", style: "font-size:12px" });
+  const showStrength = () => { strengthValue.textContent = strength.value + "%"; };
+  // Live: the renderer reads prefs on every frame, so dragging never restarts
+  // the camera. Persist once the slider is released.
+  strength.oninput = () => { prefs.effectStrength = Number(strength.value); showStrength(); };
+  strength.onchange = () => { prefs.effectStrength = Number(strength.value); showStrength(); persist?.(); };
+  const strengthRow = el("div", {}, el("label", tx("effects.strength")), strength, strengthValue);
   const performanceMode = el("select", { id: "dev-effect-performance" }, opt("fast", "effects.perfFast"), opt("balanced", "effects.perfBalanced"), opt("detail", "effects.perfDetail"));
   performanceMode.value = prefs.effectPerformance || "fast";
   performanceMode.onchange = () => { prefs.effectPerformance = performanceMode.value; onChange("video"); };
@@ -275,6 +319,7 @@ export function effectsPanel(prefs, onChange) {
   const presetRow = el("div", {}, el("label", tx("effects.background")), preset);
   const fileRow = el("div", {}, el("label", tx("effects.fileLabel")), file, info);
   const sync = () => {
+    strengthRow.classList.toggle("hidden", !strengthEffect(sel.value));
     presetRow.classList.toggle("hidden", sel.value !== "bg");
     fileRow.classList.toggle("hidden", !(sel.value === "replace" || (sel.value === "bg" && !preset.value)));
     showInfo();
@@ -288,10 +333,11 @@ export function effectsPanel(prefs, onChange) {
     } catch (e) { toast(e.message, "err"); }
     file.value = "";
   };
+  showStrength();
   sync();
   // "Usando: …" is not a plain dictionary lookup, so it follows the language here.
   const details = el("details", { class: "camdetails", open: effectActive(prefs) }, el("summary", tx("effects.summary")),
-    el("div", { class: "col", style: "margin-top:8px" }, el("div", {}, el("label", tx("effects.effect")), sel), performanceRow, presetRow, fileRow,
+    el("div", { class: "col", style: "margin-top:8px" }, el("div", {}, el("label", tx("effects.effect")), sel), strengthRow, performanceRow, presetRow, fileRow,
       el("p", { class: "muted", style: "margin:0;font-size:12px" }, el("span", tx("effects.note")))));
   const drop = onLangChange(() => { if (details.isConnected) showInfo(); else drop(); });
   return details;

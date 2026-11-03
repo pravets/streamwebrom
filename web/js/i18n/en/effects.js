@@ -27,4 +27,7 @@ export const en = {
   "effects.summary": "✨ Video effects (virtual background, blur, image)",
   "effects.effect": "Effect",
   "effects.note": "The cut-out runs in a worker on your machine without piling up frames. If the machine is overloaded, recent video wins. To use OBS filters, pick OBS Virtual Camera as the camera and leave this effect off.",
+  "effects.fillBlur": "Blur the whole video",
+  "effects.pixelate": "Pixelate",
+  "effects.strength": "Strength",
 };
