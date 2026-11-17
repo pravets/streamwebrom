@@ -803,16 +803,20 @@ func (h *Hub) publish(ctx context.Context, p *Peer, m Msg) error {
 	if id == "program" && role != RoleHost {
 		return errors.New("program stream id requires host")
 	}
+	// Read the immutable probe flag before touching Peer.mu: leave() walks
+	// rooms holding Room.mu and then asks peers for Peer.mu, so acquiring
+	// Room.mu here under Peer.mu would deadlock the two.
+	probe := p.room.IsRouteProbe()
 	p.mu.Lock()
 	_, replacing := p.pubs[id]
 	publishLimit := 8
-	if p.room.IsRouteProbe() {
+	if probe {
 		publishLimit = 1 // one picture, one subscription: the route is the point
 	}
 	full := len(p.pubs) >= publishLimit && !replacing
 	p.mu.Unlock()
 	if full {
-		if p.room.IsRouteProbe() {
+		if probe {
 			return errRouteProbeForbidden
 		}
 		return errors.New("maximum 8 published streams per peer")

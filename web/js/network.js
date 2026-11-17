@@ -10,8 +10,7 @@ export function routeCandidates(cfg) {
   return [...(cfg.relay?.provider === "cloudflare" ? ["auto"] : []), ...(hasTLS(cfg.ice) ? ["tls"] : []), ...(local ? ["local"] : [])];
 }
 
-export async function chooseRoute(cfg, probe, progress = () => {}) {
-  const candidates = routeCandidates(cfg);
+export async function chooseRoute(cfg, probe, progress = () => {}, candidates = routeCandidates(cfg)) {
   if (!candidates.length) return "auto"; // LAN/self-hosted installations without TLS relays.
   for (const mode of candidates) {
     progress(mode);
@@ -69,14 +68,18 @@ async function probeVideo(keys, mode, timeout = 12000) {
 }
 
 export async function automaticRoute(cfg, progress, roomAuth = {}) {
-  if (!cfg.capabilities?.automaticRouting || !routeCandidates(cfg).length) return "auto";
+  if (!cfg.capabilities?.automaticRouting) return "auto";
+  // The first check answers with the room's own route: /api/config describes
+  // the anonymous server view, which may prefer a relay this room never uses.
+  let pending = null;
   try {
+    pending = await api("/api/route-check", roomAuth);
+    const scoped = { ...cfg, ice: pending.ice || cfg.ice, relay: pending.relay || cfg.relay };
     // One probe per candidate: a probe accepts a single participant, and the
     // previous one must be released before the next candidate tries to enter.
-    return await chooseRoute(cfg, async (mode) => {
-      let keys;
-      try { keys = await api("/api/route-check", roomAuth); }
-      catch (e) { e.fatal = true; throw e; } // an admission refusal is not a route problem
+    return await chooseRoute(scoped, async (mode) => {
+      const keys = pending || await api("/api/route-check", roomAuth);
+      pending = null;
       try { await probeVideo(keys, mode); }
       finally { await release(keys); }
     }, progress);
@@ -85,6 +88,8 @@ export async function automaticRoute(cfg, progress, roomAuth = {}) {
     // accept the ordinary, separately authenticated join.
     if (e.code === "route_probe_busy" || e.code === "route_rate_limited") return "auto";
     throw e;
+  } finally {
+    if (pending) await release(pending); // refused or stopped before the first probe
   }
 }
 

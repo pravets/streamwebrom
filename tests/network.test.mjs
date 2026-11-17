@@ -63,3 +63,18 @@ test('an invalid room or password is reported, not turned into a route or a fall
     await assert.rejects(automaticRoute(autoCfg,()=>{}),/contraseña/);
   } finally { delete globalThis.__routeCheck; }
 });
+
+test('the guest route follows the room answer, not the anonymous server view',async()=>{
+  // /api/config says "local" (anonymous view); the room itself is on Cloudflare
+  // and its check response carries the room ICE/relay. The guest must try the
+  // Cloudflare path first instead of only the local relay.
+  const cfg={ice:[],localIce:[{urls:'turns:local.test:443?transport=tcp'}],relay:{provider:'local'},capabilities:{automaticRouting:true}};
+  const modes=[];let calls=0;
+  globalThis.__routeCheck=async()=>{calls++;return {room:'check-1',hostKey:'key',ice:[{urls:'turns:cloud.test:443?transport=tcp'}],relay:{provider:'cloudflare'}};};
+  globalThis.fetch=async()=>({});
+  try {
+    await assert.rejects(automaticRoute(cfg,mode=>modes.push(mode)),/comprobar una ruta de video/);
+    assert.deepEqual(modes,['auto','tls','local']);
+    assert.equal(calls,3,'the first answer is reused and each later candidate gets a fresh probe');
+  } finally { delete globalThis.__routeCheck; delete globalThis.fetch; }
+});

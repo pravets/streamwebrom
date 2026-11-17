@@ -52,7 +52,9 @@ with sync_playwright() as pw:
     page.locator('#createCode').fill(args.token)
     page.locator('#create').click()
     page.wait_for_url('**/studio?room=*', timeout=20000)
-    assert '#key=' in page.url
+    # The studio reads the host key from the fragment and removes it from the
+    # address bar, so the room being live is the reliable success signal.
+    expect(page.locator('#status')).to_have_text('conectado', timeout=20000)
     assert args.token not in page.url
 
     # The code lives in the field: it must not reach storage or the URL.
