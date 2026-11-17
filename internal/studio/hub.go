@@ -127,6 +127,13 @@ func ValidRoomID(id string) bool { return roomIDRe.MatchString(id) }
 
 // CreateRoom creates a room. An empty id generates a random one.
 func (h *Hub) CreateRoom(id, guestPassword, title string, lobby bool) (Keys, error) {
+	return h.createRoom(id, guestPassword, title, lobby, false)
+}
+
+// createRoom is the single admission point: ordinary rooms spend the room cap,
+// probes spend only the diagnostic quota, and both share one registry so the
+// reaper and Stats keep seeing every room.
+func (h *Hub) createRoom(id, guestPassword, title string, lobby, probe bool) (Keys, error) {
 	if id == "" {
 		id = NewRoomID()
 	}
@@ -142,12 +149,17 @@ func (h *Hub) CreateRoom(id, guestPassword, title string, lobby bool) (Keys, err
 	if err != nil {
 		return Keys{}, err
 	}
+	r.probe = probe
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.rooms[id]; ok {
 		return Keys{}, errors.New("room already exists")
 	}
-	if len(h.rooms) >= h.o.MaxRooms {
+	if probe {
+		if len(h.probes) >= maxRouteProbes {
+			return Keys{}, errRouteProbeBusy
+		}
+	} else if len(h.rooms)-len(h.probes) >= h.o.MaxRooms {
 		return Keys{}, errors.New("server is at room capacity")
 	}
 	r.onSave = func() {
@@ -157,7 +169,10 @@ func (h *Hub) CreateRoom(id, guestPassword, title string, lobby bool) (Keys, err
 		}
 	}
 	h.rooms[id] = r
-	h.log.Info("room created", "room", id)
+	if probe {
+		h.probes[id] = r
+	}
+	h.log.Info("room created", "room", id, "probe", probe)
 	return keys, nil
 }
 
@@ -217,7 +232,10 @@ func (h *Hub) ReapNow(now time.Time) int {
 	for id, r := range h.rooms {
 		r.mu.RLock()
 		expired := r.expires > 0 && r.expires <= now.UnixMilli()
-		idle := !r.persistent && len(r.peers) == 0 && len(r.waiting) == 0 && len(r.streams) == 0 && len(r.publishing) == 0 && now.Sub(r.emptyAt) > h.o.RoomTTL
+		// Probes have their own hard lifetime and an empty map entry for a few
+		// seconds is harmless; reaping them here would end an active check.
+		probe := r.probe
+		idle := !probe && !r.persistent && len(r.peers) == 0 && len(r.waiting) == 0 && len(r.streams) == 0 && len(r.publishing) == 0 && now.Sub(r.emptyAt) > h.o.RoomTTL
 		r.mu.RUnlock()
 		if idle || expired {
 			if expired && h.o.StoreDir != "" {
@@ -230,6 +248,9 @@ func (h *Hub) ReapNow(now time.Time) int {
 			}
 			r.close()
 			delete(h.rooms, id)
+			if probe {
+				delete(h.probes, id)
+			}
 			n++
 			h.log.Info("room reaped", "room", id)
 		}
@@ -306,6 +327,9 @@ func (h *Hub) handle(ctx context.Context, p *Peer, m Msg) error {
 	role := p.role()
 	if role == "" { // waiting in lobby
 		return errors.New("waiting for the host to let you in")
+	}
+	if r.IsRouteProbe() && !routeProbeMessage(m.Type) {
+		return errRouteProbeForbidden
 	}
 	switch m.Type {
 	case "ice":
@@ -481,6 +505,10 @@ func (h *Hub) join(p *Peer, m Msg) error {
 	default:
 		return errors.New("invalid role")
 	}
+	probe := r.IsRouteProbe()
+	if probe && role != RoleHost {
+		return errRouteProbeForbidden // a probe has one participant: the check itself
+	}
 	p.route = m.Route
 	p.Name = cleanName(m.Name)
 	if role == RoleViewer && m.Name == "" {
@@ -495,7 +523,11 @@ func (h *Hub) join(p *Peer, m Msg) error {
 		r.mu.Unlock()
 		return Userf("room_participants_full", "La sala alcanzó el máximo de participantes guardados")
 	}
-	if len(r.peers)+len(r.waiting) >= h.o.MaxPeers {
+	limit := h.o.MaxPeers
+	if probe {
+		limit = 1
+	}
+	if len(r.peers)+len(r.waiting) >= limit {
 		r.mu.Unlock()
 		return errFull
 	}
@@ -580,9 +612,11 @@ func (h *Hub) welcome(p *Peer) {
 		h.notifyPersistence(r)
 	}
 	if role == RoleHost {
-		w.Persistence = r.persistenceInfo(h.o.StoreDir != "", true)
-		w.RelayAccess = h.relayAccess(r)
-		w.Keys = &Keys{Room: r.ID, ViewKey: r.viewKey, PushKey: r.pushKey, InviteKey: r.inviteKey}
+		if !r.IsRouteProbe() {
+			w.Persistence = r.persistenceInfo(h.o.StoreDir != "", true)
+			w.RelayAccess = h.relayAccess(r)
+			w.Keys = &Keys{Room: r.ID, ViewKey: r.viewKey, PushKey: r.pushKey, InviteKey: r.inviteKey}
+		}
 		r.mu.RLock()
 		for _, wp := range r.waiting {
 			defer p.Send(Msg{Type: "knock", PeerID: wp.ID, Name: wp.Name})
@@ -725,6 +759,9 @@ func (h *Hub) publish(ctx context.Context, p *Peer, m Msg) error {
 	if kind == "program" && role != RoleHost {
 		return errors.New("only the host publishes the program")
 	}
+	if p.room.IsRouteProbe() && kind != "camera" && kind != "media" {
+		return errRouteProbeForbidden // no program or screen streams from a probe
+	}
 	var screenEpoch uint64
 	if kind == "screen" && role == RoleGuest {
 		p.room.mu.RLock()
@@ -760,14 +797,24 @@ func (h *Hub) publish(ctx context.Context, p *Peer, m Msg) error {
 	if !streamIDRe.MatchString(id) {
 		return errors.New("bad stream id")
 	}
+	if p.room.IsRouteProbe() && id == "program" {
+		return errRouteProbeForbidden
+	}
 	if id == "program" && role != RoleHost {
 		return errors.New("program stream id requires host")
 	}
 	p.mu.Lock()
 	_, replacing := p.pubs[id]
-	full := len(p.pubs) >= 8 && !replacing
+	publishLimit := 8
+	if p.room.IsRouteProbe() {
+		publishLimit = 1 // one picture, one subscription: the route is the point
+	}
+	full := len(p.pubs) >= publishLimit && !replacing
 	p.mu.Unlock()
 	if full {
+		if p.room.IsRouteProbe() {
+			return errRouteProbeForbidden
+		}
 		return errors.New("maximum 8 published streams per peer")
 	}
 	p.room.mu.RLock()
@@ -1396,6 +1443,9 @@ func (h *Hub) goLive(r *Room, m Msg) error {
 
 // PublishWHIP registers an external (OBS/WHIP) publisher in a room.
 func (h *Hub) PublishWHIP(ctx context.Context, r *Room, streamID string, offer webrtc.SessionDescription) (*sfu.Stream, *webrtc.SessionDescription, error) {
+	if r.IsRouteProbe() {
+		return nil, nil, errRouteProbeForbidden
+	}
 	if !streamIDRe.MatchString(streamID) {
 		return nil, nil, errors.New("bad stream id")
 	}
@@ -1416,6 +1466,9 @@ func (h *Hub) PublishWHIP(ctx context.Context, r *Room, streamID string, offer w
 
 // SubscribeWHEP attaches an external (WHEP) player.
 func (h *Hub) SubscribeWHEP(ctx context.Context, r *Room, streamID string, offer webrtc.SessionDescription) (*sfu.Subscriber, *webrtc.SessionDescription, error) {
+	if r.IsRouteProbe() {
+		return nil, nil, errRouteProbeForbidden
+	}
 	s := r.Stream(streamID)
 	if s == nil {
 		return nil, nil, errors.New("stream not found")

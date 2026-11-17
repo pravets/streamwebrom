@@ -27,14 +27,24 @@ import (
 )
 
 type env struct {
-	ts  *httptest.Server
-	hub *studio.Hub
-	dir string
+	ts   *httptest.Server
+	hub  *studio.Hub
+	dir  string
+	logs *bytes.Buffer
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return newEnvWith(t, nil)
+}
+
+// newEnvWith lets a test adjust the configuration and the hub before the
+// server starts: the optional create-token and the probe quota are both
+// decisions made before New.
+func newEnvWith(t *testing.T, mutate func(*config.Config, *studio.Options)) *env {
+	t.Helper()
+	logs := &bytes.Buffer{}
+	log := slog.New(slog.NewTextHandler(logs, nil))
 	eng, err := sfu.NewEngine(sfu.Options{Logger: log, GatherTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -45,12 +55,17 @@ func newEnv(t *testing.T) *env {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	hub := studio.NewHub(ctx, studio.Options{StoreDir: filepath.Join(dir, "rooms"), Engine: eng, Recorder: record.New(dir, "ffmpeg"), FFmpeg: "ffmpeg",
+	opts := studio.Options{StoreDir: filepath.Join(dir, "rooms"), Engine: eng, Recorder: record.New(dir, "ffmpeg"), FFmpeg: "ffmpeg",
 		MaxRooms: 10, MaxPeers: 8, MaxMsgBytes: 1 << 20, MsgRate: 100, MsgBurst: 100, RoomTTL: time.Minute,
-		CheckOrigin: server.CheckOrigin(cfg), Logger: log})
+		CheckOrigin: server.CheckOrigin(cfg), Logger: log}
+	if mutate != nil {
+		mutate(&cfg, &opts)
+	}
+	opts.CheckOrigin = server.CheckOrigin(cfg)
+	hub := studio.NewHub(ctx, opts)
 	ts := httptest.NewServer(server.New(cfg, hub, web.Files, log).Handler())
 	t.Cleanup(ts.Close)
-	return &env{ts: ts, hub: hub, dir: dir}
+	return &env{ts: ts, hub: hub, dir: dir, logs: logs}
 }
 
 func (e *env) createRoom(t *testing.T, body string) studio.Keys {

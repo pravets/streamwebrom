@@ -142,7 +142,16 @@ type Room struct {
 	streamOwners   map[string]string
 	onSave         func()
 	closed         bool
+	probe          bool // short-lived diagnostic room: own quota, reduced powers
 	probeCloud     bool // short-lived check cloned only after room authentication
+}
+
+// IsRouteProbe reports whether this is a short-lived diagnostic room. Probes
+// are never shows: they spend a separate quota and expose fewer powers.
+func (r *Room) IsRouteProbe() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.probe
 }
 
 // Keys returned once to the creator.

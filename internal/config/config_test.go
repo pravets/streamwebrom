@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
@@ -47,10 +50,64 @@ func TestValidation(t *testing.T) {
 		{"-msg-rate", "+Inf"},
 		{"-public-ip", "example.com"},
 		{"-public-url", "https://example.com/path"},
+		{"-create-token", "short"},
+		{"-create-token", "16-chars-but spaces"},
+		{"-create-token", "кириллица-не-передаётся"},
 	}
 	for _, args := range cases {
 		if _, err := Load(args, env(nil)); err == nil {
 			t.Errorf("%v should fail validation", args)
+		}
+	}
+}
+
+func TestCreateToken(t *testing.T) {
+	// The flag keeps the exact value: no trimming and no normalisation, so a
+	// padded environment variable fails instead of silently weakening the secret.
+	c, err := Load([]string{"-create-token", "abcdefghijklmnop"}, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.CreateToken != "abcdefghijklmnop" {
+		t.Fatalf("create-token not applied: %q", c.CreateToken)
+	}
+
+	c, err = Load(nil, env(map[string]string{"SWR_CREATE_TOKEN": "A1_b-23456789012"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.CreateToken != "A1_b-23456789012" {
+		t.Fatalf("SWR_CREATE_TOKEN not picked up: %q", c.CreateToken)
+	}
+
+	// Flags override the environment, including an explicit empty value.
+	c, err = Load([]string{"-create-token="}, env(map[string]string{"SWR_CREATE_TOKEN": "abcdefghijklmnop"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.CreateToken != "" {
+		t.Fatalf("empty flag must disable the protection, got %q", c.CreateToken)
+	}
+
+	// Empty means the historical behaviour: rooms are created without a secret.
+	c, err = Load(nil, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.CreateToken != "" {
+		t.Fatalf("default must leave creation open, got %q", c.CreateToken)
+	}
+
+	for _, value := range []string{
+		strings.Repeat("a", 15),
+		strings.Repeat("a", 129),
+		"                ",
+		"abcdefghijklmnop ",
+		"abcdefghijklmnop\n",
+		"abcdefghijklmn\u00f1",
+	} {
+		if _, err := Load(nil, env(map[string]string{"SWR_CREATE_TOKEN": value})); err == nil {
+			t.Errorf("%q should be rejected", value)
 		}
 	}
 }

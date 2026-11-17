@@ -44,5 +44,10 @@ export const en = {
   "home.savedRooms": "Saved rooms",
   "home.recentStudios": "Recent studios",
   "home.vdoSession": "VDO.Ninja · this browser session",
-  "home.openVdoRoom": "Open VDO.Ninja room"
+  "home.openVdoRoom": "Open VDO.Ninja room",
+  "home.accessCode": "Server access code",
+  "home.accessCodePlaceholder": "Only if the server requires it",
+  "home.accessCodeInvalid": "The access code must be 16 to 128 letters, digits, hyphens or underscores.",
+  "home.createConfigFailed": "Could not verify the server protection. Local rooms stay locked until you retry.",
+  "home.retry": "Retry"
 };

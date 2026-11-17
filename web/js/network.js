@@ -15,7 +15,13 @@ export async function chooseRoute(cfg, probe, progress = () => {}) {
   if (!candidates.length) return "auto"; // LAN/self-hosted installations without TLS relays.
   for (const mode of candidates) {
     progress(mode);
-    try { await probe(mode); return mode; } catch { /* Try the independent route before entering the real room. */ }
+    try { await probe(mode); return mode; }
+    catch (e) {
+      // A refusal from the server (invalid room/password) is final: trying the
+      // other relays cannot fix it and would hide the real reason.
+      if (e && e.fatal) throw e;
+      /* Try the independent route before entering the real room. */
+    }
   }
   throw new Error(t("misc.videoRouteCheckFailed"));
 }
@@ -64,10 +70,22 @@ async function probeVideo(keys, mode, timeout = 12000) {
 
 export async function automaticRoute(cfg, progress, roomAuth = {}) {
   if (!cfg.capabilities?.automaticRouting || !routeCandidates(cfg).length) return "auto";
-	const keys = await api("/api/route-check", roomAuth);
-	const scoped = { ...cfg, ice: keys.ice || cfg.ice, relay: keys.relay || cfg.relay };
-	try { return await chooseRoute(scoped, mode => probeVideo(keys, mode), progress); }
-  finally { await release(keys); }
+  try {
+    // One probe per candidate: a probe accepts a single participant, and the
+    // previous one must be released before the next candidate tries to enter.
+    return await chooseRoute(cfg, async (mode) => {
+      let keys;
+      try { keys = await api("/api/route-check", roomAuth); }
+      catch (e) { e.fatal = true; throw e; } // an admission refusal is not a route problem
+      try { await probeVideo(keys, mode); }
+      finally { await release(keys); }
+    }, progress);
+  } catch (e) {
+    // A busy diagnostic pool must not block the guest: the server may still
+    // accept the ordinary, separately authenticated join.
+    if (e.code === "route_probe_busy" || e.code === "route_rate_limited") return "auto";
+    throw e;
+  }
 }
 
 export async function checkVideoRoute(mode) {

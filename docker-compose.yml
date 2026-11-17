@@ -9,5 +9,6 @@ services:
       SWR_SELF_SIGNED: "true"      # o usa SWR_AUTOCERT=tu-dominio.com con los puertos 80/443
       SWR_PUBLIC_IP: ""            # tu IP pública si hay NAT
       SWR_ADMIN_TOKEN: ""          # habilita /api/admin/stats y /metrics
+      SWR_CREATE_TOKEN: ${SWR_CREATE_TOKEN:-}  # código para crear salas; vacío lo desactiva
     volumes:
       - ./streamwebrom-data:/data

@@ -138,7 +138,20 @@ Every option is a flag or an environment variable `SWR_<NAME>` (e.g. `-udp-port`
 | `-max-rooms` / `-max-peers` | `500` / `64` | Limits |
 | `-msg-rate` / `-msg-burst` / `-max-msg` | `30` / `60` / `256KiB` | Signaling anti-abuse |
 | `-admin-token` | | Enables `/api/admin/stats` and `/metrics` (Prometheus) |
+| `-create-token` | | Requires an access code to create rooms with `POST /api/rooms` (16-128 letters, digits, `-` or `_`; empty disables it). Accepts `Authorization: Bearer <code>` or `X-Create-Token`; the page never stores the code |
 | `-open` | `false` | Opens the browser on start |
+
+### Access code for creating rooms
+
+`-create-token` (or `SWR_CREATE_TOKEN`) requires a code for `POST /api/rooms`. It must be 16-128 ASCII letters, digits, `-` or `_`; generate one with `openssl rand -hex 32`. The home page only shows the field when the server asks for it and never stores the code.
+
+```bash
+curl -X POST https://live.example.com/api/rooms \
+  -H "Authorization: Bearer <code>" -H "Content-Type: application/json" \
+  -d '{"room":"my-room","title":"My show"}'
+```
+
+`X-Create-Token` is accepted too. Without a code, any visitor can create rooms and fill `-max-rooms`; empty disables the protection (LAN, desktop, Windows launcher). It does not replace the guest password or the room keys: those protect a room that already exists. Network checks (`/api/route-check`) stay open for guest invites, but have their own quota of 32 and do not spend `-max-rooms`; their keys cannot record, go live or publish through WHIP/WHEP.
 
 ## Development
 
