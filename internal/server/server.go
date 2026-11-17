@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,27 @@ type Server struct {
 	ipRate    map[string]*rate.Limiter // room creation per client IP
 	probeRate map[string]*rate.Limiter
 	ipConns   map[string]int // open WebSockets per client IP
+
+	// Wrong create-token attempts get their own budget, so guessing a secret
+	// can never spend the allowance that creates real rooms.
+	createHash [sha256.Size]byte
+	createAuth map[string]*createAuthEntry
+	authSweep  time.Time
+}
+
+// create-auth limits: ten guesses in a burst, one more per second, and a
+// bounded map that forgets addresses idle for ten minutes.
+const (
+	createTokenMaxLen  = 128
+	createAuthBurst    = 10
+	createAuthEntries  = 50000
+	createAuthIdle     = 10 * time.Minute
+	createAuthSweepAge = time.Minute
+)
+
+type createAuthEntry struct {
+	lim  *rate.Limiter
+	seen time.Time
 }
 
 // MaxWSPerIP bounds simultaneous signalling connections from one address.
@@ -105,6 +127,88 @@ func (s *Server) allowCreate(ip string) bool {
 	return l.Allow()
 }
 
+// allowCreateFailure spends one guess from the create-token budget of ip. It
+// is consulted only after a credential failed to match, so a valid token never
+// queues behind other callers' mistakes.
+func (s *Server) allowCreateFailure(ip string) bool {
+	now := time.Now()
+	s.ipMu.Lock()
+	defer s.ipMu.Unlock()
+	if s.createAuth == nil {
+		s.createAuth = map[string]*createAuthEntry{}
+	}
+	if now.Sub(s.authSweep) >= createAuthSweepAge {
+		s.authSweep = now
+		for key, entry := range s.createAuth {
+			if now.Sub(entry.seen) > createAuthIdle {
+				delete(s.createAuth, key)
+			}
+		}
+	}
+	entry := s.createAuth[ip]
+	if entry == nil {
+		if len(s.createAuth) >= createAuthEntries {
+			return false // bounded map: reject rather than forget every budget
+		}
+		entry = &createAuthEntry{lim: rate.NewLimiter(rate.Every(time.Second), createAuthBurst)}
+		s.createAuth[ip] = entry
+	}
+	entry.seen = now
+	return entry.lim.Allow()
+}
+
+// createAuthorized enforces the optional -create-token secret. It runs before
+// allowCreate so a wrong code never spends the room creation allowance.
+func (s *Server) createAuthorized(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.CreateToken == "" {
+		return true
+	}
+	if token, ok := createCredential(r); ok && s.createTokenMatches(token) {
+		return true
+	}
+	if !s.allowCreateFailure(ClientIP(r)) {
+		writeJSON(w, 429, errorJSON("Demasiados intentos con el código de acceso, espera un momento", "room_create_rate_limited"))
+		return false
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer realm="streamwebrom"`)
+	writeJSON(w, 401, errorJSON("La creación de salas requiere el código de acceso del servidor", "room_create_forbidden"))
+	return false
+}
+
+// createCredential reads exactly one supported header. A query parameter would
+// leak the secret into proxy logs and Referer, so it is deliberately rejected.
+func createCredential(r *http.Request) (string, bool) {
+	authorization := r.Header.Values("Authorization")
+	alternate := r.Header.Values("X-Create-Token")
+	if len(authorization) > 1 || len(alternate) > 1 || (len(authorization) == 1 && len(alternate) == 1) {
+		return "", false
+	}
+	var token string
+	switch {
+	case len(authorization) == 1:
+		scheme, rest, cut := strings.Cut(strings.TrimSpace(authorization[0]), " ")
+		if !cut || !strings.EqualFold(scheme, "Bearer") {
+			return "", false
+		}
+		token = strings.TrimSpace(rest)
+	case len(alternate) == 1:
+		token = strings.TrimSpace(alternate[0])
+	default:
+		return "", false
+	}
+	if token == "" || len(token) > createTokenMaxLen {
+		return "", false
+	}
+	return token, true
+}
+
+// createTokenMatches hashes both sides so the comparison is constant time
+// regardless of the submitted length.
+func (s *Server) createTokenMatches(token string) bool {
+	sum := sha256.Sum256([]byte(token))
+	return subtle.ConstantTimeCompare(sum[:], s.createHash[:]) == 1
+}
+
 func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	ip := ClientIP(r)
 	s.ipMu.Lock()
@@ -128,7 +232,11 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 // New creates the server.
 func New(cfg config.Config, hub *studio.Hub, static fs.FS, log *slog.Logger, iceProvider ...func() []webrtc.ICEServer) *Server {
 	s := &Server{cfg: cfg, hub: hub, static: static, log: log, start: time.Now(), sessions: map[string]session{},
-		ipRate: map[string]*rate.Limiter{}, probeRate: map[string]*rate.Limiter{}, ipConns: map[string]int{}}
+		ipRate: map[string]*rate.Limiter{}, probeRate: map[string]*rate.Limiter{}, ipConns: map[string]int{},
+		createAuth: map[string]*createAuthEntry{}}
+	if cfg.CreateToken != "" {
+		s.createHash = sha256.Sum256([]byte(cfg.CreateToken))
+	}
 	s.assetPrefix = shellPrefix(static)
 	if len(iceProvider) > 0 {
 		s.iceProvider = iceProvider[0]
@@ -298,7 +406,8 @@ func (s *Server) clientConfig(w http.ResponseWriter, r *http.Request) {
 		localICE = s.LocalICEProvider()
 	}
 	writeJSON(w, 200, map[string]any{"ice": s.iceServers(), "publicURL": s.cfg.PublicURL, "version": s.cfg.Version, "layouts": studio.Layouts,
-		"localIce": localICE, "relay": relay, "capabilities": map[string]bool{"multistream": ffmpegErr == nil, "recording": true, "trickleICE": true, "automaticRouting": true}})
+		"createProtected": s.cfg.CreateToken != "",
+		"localIce":        localICE, "relay": relay, "capabilities": map[string]bool{"multistream": ffmpegErr == nil, "recording": true, "trickleICE": true, "automaticRouting": true}})
 }
 
 // WHIP/WHEP transports must also release allocations on a provider cutoff.
@@ -338,6 +447,9 @@ type createReq struct {
 }
 
 func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
+	if !s.createAuthorized(w, r) {
+		return
+	}
 	if !s.allowCreate(ClientIP(r)) {
 		writeJSON(w, 429, errorJSON("demasiadas salas creadas, espera un momento", "rooms_rate_limited"))
 		return
@@ -365,6 +477,10 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 // signalling frames. Authenticate first, then enforce a separate bounded body.
 func (s *Server) saveRoom(w http.ResponseWriter, r *http.Request) {
 	room := s.hub.Room(r.PathValue("room"))
+	if room != nil && room.IsRouteProbe() {
+		writeJSON(w, 403, errorJSON("la comprobación de red no guarda ajustes", "route_probe_forbidden"))
+		return
+	}
 	key := bearer(r)
 	if room == nil || !room.CheckHost(key) {
 		writeJSON(w, 401, errorJSON("unauthorized", "unauthorized"))
@@ -491,6 +607,10 @@ func (s *Server) whip(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "room not found", http.StatusNotFound)
 		return
 	}
+	if room.IsRouteProbe() {
+		writeJSON(w, 403, errorJSON("la comprobación de red no acepta WHIP", "route_probe_forbidden"))
+		return
+	}
 	key := bearer(r)
 	if !room.CheckPush(key) && !room.CheckHost(key) {
 		http.Error(w, "invalid bearer token (use the room push key)", http.StatusUnauthorized)
@@ -519,6 +639,10 @@ func (s *Server) whep(w http.ResponseWriter, r *http.Request) {
 	room := s.hub.Room(r.PathValue("room"))
 	if room == nil {
 		http.Error(w, "room not found", http.StatusNotFound)
+		return
+	}
+	if room.IsRouteProbe() {
+		writeJSON(w, 403, errorJSON("la comprobación de red no acepta WHEP", "route_probe_forbidden"))
 		return
 	}
 	key := bearer(r)

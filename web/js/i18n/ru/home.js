@@ -44,5 +44,10 @@ export const ru = {
   "home.savedRooms": "Сохранённые комнаты",
   "home.recentStudios": "Недавние студии",
   "home.vdoSession": "VDO.Ninja · эта сессия браузера",
-  "home.openVdoRoom": "Открыть комнату VDO.Ninja"
+  "home.openVdoRoom": "Открыть комнату VDO.Ninja",
+  "home.accessCode": "Код доступа сервера",
+  "home.accessCodePlaceholder": "Только если сервер его требует",
+  "home.accessCodeInvalid": "Код доступа — от 16 до 128 латинских букв, цифр, дефисов или подчёркиваний.",
+  "home.createConfigFailed": "Не удалось проверить защиту сервера. Локальные комнаты остаются заблокированы до повторной попытки.",
+  "home.retry": "Повторить"
 };

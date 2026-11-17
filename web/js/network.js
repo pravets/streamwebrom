@@ -10,12 +10,17 @@ export function routeCandidates(cfg) {
   return [...(cfg.relay?.provider === "cloudflare" ? ["auto"] : []), ...(hasTLS(cfg.ice) ? ["tls"] : []), ...(local ? ["local"] : [])];
 }
 
-export async function chooseRoute(cfg, probe, progress = () => {}) {
-  const candidates = routeCandidates(cfg);
+export async function chooseRoute(cfg, probe, progress = () => {}, candidates = routeCandidates(cfg)) {
   if (!candidates.length) return "auto"; // LAN/self-hosted installations without TLS relays.
   for (const mode of candidates) {
     progress(mode);
-    try { await probe(mode); return mode; } catch { /* Try the independent route before entering the real room. */ }
+    try { await probe(mode); return mode; }
+    catch (e) {
+      // A refusal from the server (invalid room/password) is final: trying the
+      // other relays cannot fix it and would hide the real reason.
+      if (e && e.fatal) throw e;
+      /* Try the independent route before entering the real room. */
+    }
   }
   throw new Error(t("misc.videoRouteCheckFailed"));
 }
@@ -63,11 +68,29 @@ async function probeVideo(keys, mode, timeout = 12000) {
 }
 
 export async function automaticRoute(cfg, progress, roomAuth = {}) {
-  if (!cfg.capabilities?.automaticRouting || !routeCandidates(cfg).length) return "auto";
-	const keys = await api("/api/route-check", roomAuth);
-	const scoped = { ...cfg, ice: keys.ice || cfg.ice, relay: keys.relay || cfg.relay };
-	try { return await chooseRoute(scoped, mode => probeVideo(keys, mode), progress); }
-  finally { await release(keys); }
+  if (!cfg.capabilities?.automaticRouting) return "auto";
+  // The first check answers with the room's own route: /api/config describes
+  // the anonymous server view, which may prefer a relay this room never uses.
+  let pending = null;
+  try {
+    pending = await api("/api/route-check", roomAuth);
+    const scoped = { ...cfg, ice: pending.ice || cfg.ice, relay: pending.relay || cfg.relay };
+    // One probe per candidate: a probe accepts a single participant, and the
+    // previous one must be released before the next candidate tries to enter.
+    return await chooseRoute(scoped, async (mode) => {
+      const keys = pending || await api("/api/route-check", roomAuth);
+      pending = null;
+      try { await probeVideo(keys, mode); }
+      finally { await release(keys); }
+    }, progress);
+  } catch (e) {
+    // A busy diagnostic pool must not block the guest: the server may still
+    // accept the ordinary, separately authenticated join.
+    if (e.code === "route_probe_busy" || e.code === "route_rate_limited") return "auto";
+    throw e;
+  } finally {
+    if (pending) await release(pending); // refused or stopped before the first probe
+  }
 }
 
 export async function checkVideoRoute(mode) {

@@ -40,7 +40,11 @@ func (s *Server) createRouteCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	keys, err := s.hub.CreateRoomRouteProbe(req.Room, req.Password)
 	if err != nil {
-		writeJSON(w, 400, errorJSON(err.Error(), studio.CodeOf(err)))
+		status := http.StatusBadRequest
+		if studio.CodeOf(err) == "route_probe_busy" {
+			status = http.StatusServiceUnavailable
+		}
+		writeJSON(w, status, errorJSON(err.Error(), studio.CodeOf(err)))
 		return
 	}
 	ice, provider := s.hub.RoomICE(s.hub.Room(keys.Room), "")

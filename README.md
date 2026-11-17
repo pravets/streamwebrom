@@ -138,7 +138,20 @@ Cada opción es flag o variable de entorno `SWR_<NOMBRE>` (p. ej. `-udp-port` = 
 | `-max-rooms` / `-max-peers` | `500` / `64` | Límites |
 | `-msg-rate` / `-msg-burst` / `-max-msg` | `30` / `60` / `256KiB` | Anti-abuso de señalización |
 | `-admin-token` | | Habilita `/api/admin/stats` y `/metrics` (Prometheus) |
+| `-create-token` | | Exige un código para crear salas con `POST /api/rooms` (16-128 letras, números, `-` o `_`; vacío lo desactiva). Acepta `Authorization: Bearer <código>` o `X-Create-Token`; el código no se guarda en la página |
 | `-open` | `false` | Abre el navegador al iniciar |
+
+### Código de acceso para crear salas
+
+`-create-token` (o `SWR_CREATE_TOKEN`) exige un código a `POST /api/rooms`. Debe tener 16-128 letras ASCII, números, `-` o `_`; genera uno con `openssl rand -hex 32`. La página de inicio muestra el campo solo cuando el servidor lo pide y nunca guarda el código.
+
+```bash
+curl -X POST https://live.example.com/api/rooms \
+  -H "Authorization: Bearer <código>" -H "Content-Type: application/json" \
+  -d '{"room":"mi-sala","title":"Mi programa"}'
+```
+
+También se acepta `X-Create-Token`. Sin el código, cualquier visitante puede crear salas y ocupar `-max-rooms`; vacío desactiva la protección (LAN, escritorio, lanzador de Windows). No sustituye a la contraseña de invitados ni a las claves de la sala: esas protegen una sala ya creada. Las comprobaciones de red (`/api/route-check`) siguen abiertas para invitar invitados, pero tienen su propia cuota de 32 y no gastan `-max-rooms`; sus claves no permiten grabar, emitir en directo ni publicar por WHIP/WHEP.
 
 ## Desarrollo
 

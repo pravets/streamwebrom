@@ -44,5 +44,10 @@ export const es = {
   "home.savedRooms": "Salas guardadas",
   "home.recentStudios": "Estudios recientes",
   "home.vdoSession": "VDO.Ninja · esta sesión del navegador",
-  "home.openVdoRoom": "Abrir sala VDO.Ninja"
+  "home.openVdoRoom": "Abrir sala VDO.Ninja",
+  "home.accessCode": "Código de acceso del servidor",
+  "home.accessCodePlaceholder": "Solo si el servidor lo exige",
+  "home.accessCodeInvalid": "El código de acceso debe tener entre 16 y 128 letras, números, guiones o guiones bajos.",
+  "home.createConfigFailed": "No se pudo comprobar la protección del servidor. Las salas locales siguen bloqueadas hasta reintentar.",
+  "home.retry": "Reintentar"
 };

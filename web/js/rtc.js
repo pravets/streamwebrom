@@ -76,12 +76,20 @@ export function serverError(message) {
   return String(message || "");
 }
 
-export async function api(path, body) {
+export async function api(path, body, extraHeaders = {}) {
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 20000);
   try {
-    const r = await fetch(path, { ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}), signal: controller.signal });
+    const headers = { ...(body ? { "Content-Type": "application/json" } : {}), ...extraHeaders };
+    const r = await fetch(path, { ...(body ? { method: "POST", body: JSON.stringify(body) } : {}), headers, signal: controller.signal });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(serverError(data) || r.statusText);
+    if (!r.ok) {
+      // Keep the machine-readable code so callers can react to it without
+      // parsing the localized message.
+      const error = new Error(serverError(data) || r.statusText);
+      error.code = data && data.code;
+      error.status = r.status;
+      throw error;
+    }
     return data;
   } finally { clearTimeout(timer); }
 }

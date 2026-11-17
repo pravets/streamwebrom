@@ -15,7 +15,7 @@ class Socket {
   close() { this.readyState = 3; this.onclose?.(); }
 }
 globalThis.WebSocket = Socket;
-const { Signal, readStored, waitConnected, iceConfiguration, publish, subscribe } = await import(await moduleURL('rtc.js'));
+const { Signal, readStored, waitConnected, iceConfiguration, publish, subscribe, api } = await import(await moduleURL('rtc.js'));
 const signals=[];
 
 test('restricted mobile mode uses only TLS/443 relay candidates',()=>{
@@ -200,4 +200,26 @@ test('a saved room retains participant identity across tabs and clears it on rev
 test('disabling room persistence removes durable identity while retaining session reconnection',async()=>{
   const persistent=new Map();globalThis.localStorage={getItem:k=>persistent.get(k),setItem:(k,v)=>persistent.set(k,v),removeItem:k=>persistent.delete(k)};
   try {const s=signal(),ws=await connected(s);ws.receive({type:'room-persistent',persistent:true});ws.receive({type:'room-persistent',persistent:false});assert.equal(persistent.size,0);assert.equal(storage.get('swr.rejoin.test-room'),'pass')} finally {delete globalThis.localStorage}
+});
+
+test('api merges extra headers and keeps the machine-readable error code',async()=>{
+  const calls=[];
+  globalThis.fetch=async(url,init)=>{calls.push({url,init});return {ok:false,status:401,statusText:'Unauthorized',json:async()=>({error:'necesita código',code:'room_create_forbidden'})};};
+  try {
+    await assert.rejects(api('/api/rooms',{room:'x'},{Authorization:'Bearer access-code-123456'}),e=>{
+      assert.equal(e.code,'room_create_forbidden');
+      assert.equal(e.status,401);
+      assert.match(e.message,/código/);
+      return true;
+    });
+    assert.equal(calls[0].init.method,'POST');
+    assert.equal(calls[0].init.headers['Content-Type'],'application/json');
+    assert.equal(calls[0].init.headers.Authorization,'Bearer access-code-123456');
+    assert.equal(JSON.parse(calls[0].init.body).room,'x');
+    // A plain GET keeps the historical two-argument shape.
+    calls.length=0;
+    globalThis.fetch=async(url,init)=>{calls.push({url,init});return {ok:true,status:200,json:async()=>({createProtected:true})};};
+    assert.deepEqual(await api('/api/config'),{createProtected:true});
+    assert.equal(calls[0].init.method,undefined);
+  } finally {delete globalThis.fetch}
 });

@@ -48,6 +48,7 @@ type Config struct {
 	UDPPortMax         int           // ephemeral range max
 	FFmpeg             string        // ffmpeg binary for restreaming
 	AdminToken         string        // protects /api/admin/*
+	CreateToken        string        // protects POST /api/rooms (empty disables it)
 	AllowedOrigins     []string      // WebSocket origins allowed ("*" = any)
 	MaxRooms           int           // hard cap on concurrent rooms
 	MaxPeers           int           // per room
@@ -113,6 +114,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	fs.IntVar(&c.UDPPortMax, "udp-max", 0, "maximum ephemeral UDP port")
 	fs.StringVar(&c.FFmpeg, "ffmpeg", c.FFmpeg, "ffmpeg binary used for RTMP multistreaming")
 	fs.StringVar(&c.AdminToken, "admin-token", "", "token for /api/admin endpoints (empty disables them)")
+	fs.StringVar(&c.CreateToken, "create-token", "", "secret required to create rooms: 16-128 ASCII letters, digits, '-' or '_' (empty disables it)")
 	fs.StringVar(&origins, "origins", "", "comma separated allowed WebSocket origins; empty = same host only; * = any")
 	fs.IntVar(&c.MaxRooms, "max-rooms", c.MaxRooms, "maximum concurrent rooms")
 	fs.IntVar(&c.MaxPeers, "max-peers", c.MaxPeers, "maximum peers per room")
@@ -182,6 +184,9 @@ func (c Config) Validate() error {
 	if c.UDPPortMin < 0 || c.UDPPortMax > 65535 || (c.UDPPortMin == 0) != (c.UDPPortMax == 0) || c.UDPPortMin > c.UDPPortMax {
 		errs = append(errs, errors.New("udp-min and udp-max must both be set and min <= max"))
 	}
+	if c.CreateToken != "" && !validCreateToken(c.CreateToken) {
+		errs = append(errs, errors.New("create-token must be 16-128 ASCII letters, digits, '-' or '_'"))
+	}
 	if c.MaxPeers < 2 {
 		errs = append(errs, errors.New("max-peers must be >= 2"))
 	}
@@ -222,6 +227,23 @@ func (c Config) Validate() error {
 // TLSEnabled reports whether the server terminates TLS itself.
 func (c Config) TLSEnabled() bool {
 	return c.TLSCert != "" || c.SelfSigned || c.AutocertDomain != ""
+}
+
+// validCreateToken keeps the room secret inside the set every layer can carry:
+// a plain ASCII token travels unchanged in a fetch Authorization header, while
+// spaces, control characters and non-ASCII would be dropped or rejected by the
+// browser before the request leaves the page.
+func validCreateToken(token string) bool {
+	if len(token) < 16 || len(token) > 128 {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func splitList(s string) []string {
