@@ -37,20 +37,3 @@ jobs:
           name: android
           path: dist/*
       # Published with the complete verified release; never overwrite assets on tags.
-  ios:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: brew install xcodegen
-      - run: cd mobile/ios && xcodegen generate
-      - name: build iPhone/iPad simulator app without signing
-        run: xcodebuild -project mobile/ios/StreamWebRom.xcodeproj -scheme StreamWebRom -sdk iphonesimulator -configuration Release -derivedDataPath mobile/ios/build CODE_SIGNING_ALLOWED=NO build
-      - name: package simulator app
-        run: |
-          mkdir -p dist
-          cd mobile/ios/build/Build/Products/Release-iphonesimulator
-          zip -qry "$GITHUB_WORKSPACE/dist/StreamWebRom-iOS-simulator.zip" StreamWebRom.app
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ios-simulator
-          path: dist/StreamWebRom-iOS-simulator.zip

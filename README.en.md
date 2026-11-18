@@ -60,7 +60,7 @@ or leave `ffmpeg.exe` next to the executable.
 
 **Installable web app (PWA):** open the studio in Chrome/Edge and use *Install app*; it works on PC and mobile just like VDO.Ninja.
 
-**Android:** the delivery includes a test APK and an unsigned one for distribution. **iPhone/iPad:** SwiftUI/WKWebView project and simulator build in CI; an IPA for devices requires Apple signing. Both clients connect to your HTTPS server. Instructions and limits in [mobile/README.md](mobile/README.md).
+**Android:** the delivery includes a test APK and an unsigned one for distribution. **iPhone/iPad:** SwiftUI/WKWebView project; build the simulator app locally with Xcode, since CI no longer uses a macOS runner. An IPA for devices requires Apple signing. Both clients connect to your HTTPS server. Instructions and limits in [mobile/README.md](mobile/README.md).
 
 **Before going live:** open `/diagnostics` to check browser, camera/microphone, server connection, ffmpeg and TURN configuration.
 

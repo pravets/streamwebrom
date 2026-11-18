@@ -39,7 +39,7 @@ xcodegen generate
 xcodebuild -project StreamWebRom.xcodeproj -scheme StreamWebRom -sdk iphonesimulator -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
 ```
 
-El workflow `mobile` de GitHub realiza esta compilación y conserva un ZIP para simulador. **No es un IPA instalable en iPhone.** Para un dispositivo físico, abre el proyecto en Xcode, selecciona tu equipo de desarrollo y configura firma y perfiles. Completa los iconos y los requisitos de privacidad de Apple antes de distribuir en App Store/TestFlight.
+Compílala en Xcode en local: CI ya no ejecuta un runner macOS y no publica este ZIP. **No es un IPA instalable en iPhone.** Para un dispositivo físico, abre el proyecto en Xcode, selecciona tu equipo de desarrollo y configura firma y perfiles. Completa los iconos y los requisitos de privacidad de Apple antes de distribuir en App Store/TestFlight.
 
 WKWebView permite cámara/micrófono solo al origen elegido y pide consentimiento. No se ignoran errores TLS. Los datos web de la sesión usan almacenamiento no persistente; las preferencias nativas guardan solo el origen del servidor, sin claves de anfitrión ni enlaces completos. Al abandonar el primer plano se libera la página; al volver se recarga.
 
