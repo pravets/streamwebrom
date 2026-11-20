@@ -92,6 +92,7 @@ export const ru = {
   "studio.destHelp": "Трансляция сразу на несколько платформ. Ключи сохраняются только в этом браузере.",
   "studio.platform": "Платформа",
   "studio.linkedin": "LinkedIn (свой URL)",
+  "studio.telegramHelp": "В своём Telegram-канале запустите прямую трансляцию через внешнее приложение. Вставьте сюда URL и ключ, которые показывает Telegram.",
   "studio.customPlatform": "Другое (RTMP/RTMPS/SRT)",
   "studio.serverURL": "URL сервера",
   "studio.streamKey": "Ключ трансляции",

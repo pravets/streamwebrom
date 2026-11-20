@@ -137,6 +137,8 @@ export const en = {
   "studiojs.load": "Load",
   "studiojs.destSaveFailed": "Could not save destinations in this browser",
   "studiojs.destUrlInvalid": "The URL must start with rtmp://, rtmps:// or srt://",
+  "studiojs.telegramUrlInvalid": "Paste the RTMP or RTMPS URL Telegram shows you",
+  "studiojs.telegramKeyRequired": "Enter Telegram's stream key",
   "studiojs.noDests": "No destinations. You can also capture the program in OBS from the OBS tab.",
   "studiojs.program": "Program",
   "studiojs.endLiveConfirm": "End the stream?",

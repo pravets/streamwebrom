@@ -92,6 +92,7 @@ export const es = {
   "studio.destHelp": "Transmite a varias plataformas a la vez. Las claves se guardan solo en este navegador.",
   "studio.platform": "Plataforma",
   "studio.linkedin": "LinkedIn (usa tu URL)",
+  "studio.telegramHelp": "En tu canal de Telegram, inicia una transmisión en vivo con una aplicación externa. Copia aquí la URL y la clave que te muestra Telegram.",
   "studio.customPlatform": "Personalizado (RTMP/RTMPS/SRT)",
   "studio.serverURL": "URL del servidor",
   "studio.streamKey": "Clave de transmisión",

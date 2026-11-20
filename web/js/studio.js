@@ -780,13 +780,34 @@ function renderScenes() {
 const destKey = `swr.dest.${room}`;
 let dests = readStored(destKey, readStored("swr.dest", []));
 const saveDests = () => { if (!writeStored(destKey, dests)) toast(t("studiojs.destSaveFailed"), "err"); writeStored("swr.dest", dests); renderDests(); scheduleRoomOptions(); };
-$("#destPreset").onchange = (e) => { $("#destURL").value = e.target.value; };
-$("#destURL").value = $("#destPreset").value;
+const destPreset = $("#destPreset");
+function updateDestPreset() {
+  const telegram = destPreset.value === "telegram";
+  $("#destURL").value = telegram ? "" : destPreset.value;
+  $("#telegramDestHelp").classList.toggle("hidden", !telegram);
+}
+destPreset.onchange = () => {
+  $("#destKey").value = "";
+  updateDestPreset();
+};
+updateDestPreset();
 $("#destAdd").onclick = () => {
   const base = $("#destURL").value.trim(), key = $("#destKey").value.trim();
-  if (!/^(rtmps?|srt):\/\//.test(base)) return toast(t("studiojs.destUrlInvalid"), "err");
-  const url = key ? base.replace(/\/?$/, "/") + key : base;
-  dests.push({ name: $("#destPreset").selectedOptions[0].textContent.split(" ")[0], url, enabled: true });
+  let url;
+  if (destPreset.value === "telegram") {
+    let endpoint;
+    try { endpoint = new URL(base); } catch { /* Report invalid URLs below. */ }
+    if (!endpoint?.hostname || !["rtmp:", "rtmps:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.hash) {
+      return toast(t("studiojs.telegramUrlInvalid"), "err");
+    }
+    if (!key) return toast(t("studiojs.telegramKeyRequired"), "err");
+    endpoint.pathname = endpoint.pathname.replace(/\/?$/, "/") + key;
+    url = endpoint.href;
+  } else {
+    if (!/^(rtmps?|srt):\/\//.test(base)) return toast(t("studiojs.destUrlInvalid"), "err");
+    url = key ? base.replace(/\/?$/, "/") + key : base;
+  }
+  dests.push({ name: destPreset.selectedOptions[0].textContent.split(" ")[0], url, enabled: true });
   $("#destKey").value = "";
   saveDests();
 };

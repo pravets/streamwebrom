@@ -137,6 +137,8 @@ export const ru = {
   "studiojs.load": "Загрузить",
   "studiojs.destSaveFailed": "Не удалось сохранить назначения в этом браузере",
   "studiojs.destUrlInvalid": "URL должен начинаться с rtmp://, rtmps:// или srt://",
+  "studiojs.telegramUrlInvalid": "Вставьте RTMP- или RTMPS-URL, который показывает Telegram",
+  "studiojs.telegramKeyRequired": "Введите ключ трансляции Telegram",
   "studiojs.noDests": "Назначений нет. Программу также можно захватить в OBS на вкладке OBS.",
   "studiojs.program": "Программа",
   "studiojs.endLiveConfirm": "Завершить трансляцию?",

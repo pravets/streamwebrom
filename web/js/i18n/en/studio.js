@@ -92,6 +92,7 @@ export const en = {
   "studio.destHelp": "Stream to several platforms at once. Keys are stored only in this browser.",
   "studio.platform": "Platform",
   "studio.linkedin": "LinkedIn (use your URL)",
+  "studio.telegramHelp": "In your Telegram channel, start a live stream with an external app. Paste the URL and key Telegram shows you here.",
   "studio.customPlatform": "Custom (RTMP/RTMPS/SRT)",
   "studio.serverURL": "Server URL",
   "studio.streamKey": "Stream key",
