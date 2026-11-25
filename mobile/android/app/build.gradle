@@ -14,5 +14,25 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    buildTypes { release { minifyEnabled false } }
+    // Release signing is opt-in: CI passes -PSWR_STORE_FILE… (or ORG_GRADLE_PROJECT_…)
+    // from repository secrets. Without a key the release stays unsigned and is
+    // published under an explicit "-unsigned" name, never as the installable app.
+    signingConfigs {
+        release {
+            if (project.hasProperty('SWR_STORE_FILE') && SWR_STORE_FILE) {
+                storeFile file(SWR_STORE_FILE)
+                storePassword SWR_STORE_PASSWORD
+                keyAlias SWR_KEY_ALIAS
+                keyPassword SWR_KEY_PASSWORD
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (project.hasProperty('SWR_STORE_FILE') && SWR_STORE_FILE) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
 }

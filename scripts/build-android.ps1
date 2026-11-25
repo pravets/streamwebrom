@@ -2,7 +2,8 @@ param(
     [string]$Sdk = $env:ANDROID_HOME,
     [string]$JavaHome = $env:JAVA_HOME,
     [string]$OutDir = "",
-    [string]$DebugKeystore = ""
+    [string]$DebugKeystore = "",
+    [string]$ReleaseKeystore = $env:SWR_KEYSTORE
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -52,3 +53,10 @@ Run "$JavaHome\bin\java.exe" @('-jar', "$tools\lib\apksigner.jar", 'sign', '--ks
 Run "$JavaHome\bin\java.exe" @('-jar', "$tools\lib\apksigner.jar", 'verify', '--verbose', $debug)
 Write-Output "APK for testing: $debug"
 Write-Output "Unsigned APK for your release key: $unsigned"
+if ($ReleaseKeystore) {
+    $signed = Join-Path $OutDir 'StreamWebRom-Android.apk'
+    $alias = if ($env:SWR_KEY_ALIAS) { $env:SWR_KEY_ALIAS } else { 'release' }
+    Run "$JavaHome\bin\java.exe" @('-jar', "$tools\lib\apksigner.jar", 'sign', '--ks', $ReleaseKeystore, '--ks-pass', "pass:$env:SWR_KEYSTORE_PASSWORD", '--ks-key-alias', $alias, '--key-pass', "pass:$env:SWR_KEY_PASSWORD", '--out', $signed, $unsigned)
+    Run "$JavaHome\bin\java.exe" @('-jar', "$tools\lib\apksigner.jar", 'verify', '--verbose', $signed)
+    Write-Output "Signed release APK: $signed"
+}

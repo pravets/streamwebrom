@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hint_server">https://ваш-сервер или ссылка-приглашение</string>
+    <string name="open">Открыть</string>
+    <string name="browser">Браузер</string>
+    <string name="background">Фоновый режим</string>
+    <string name="background_on">Фоновый режим: вкл</string>
+    <string name="bg_need_room">Сначала откройте комнату, затем включайте фоновый режим</string>
+    <string name="bg_need_mic">Включите микрофон комнаты и выдайте разрешение перед включением фонового режима</string>
+    <string name="help">Подключите ваш HTTPS-сервер. Войдите в комнату и включите фоновый режим, чтобы сохранить звук и соединение при использовании других приложений. Android может приостановить камеру. Для демонстрации экрана используйте совместимый браузер.</string>
+    <string name="no_browser">Браузер не установлен</string>
+    <string name="bad_url">Используйте HTTPS-URL</string>
+    <string name="bg_failed">Android не разрешил фоновый звук. Попробуйте ещё раз с видимой комнатой.</string>
+    <string name="restart_notice">Комната перезагрузилась при сворачивании без фонового режима. Включите его, чтобы сохранить звук и соединение.</string>
+    <string name="ssl_title">Недоверенный сертификат</string>
+    <string name="ssl_message">Сервер %1$s предъявляет недоверенный сертификат (например, самоподписанный в вашей LAN). Продолжайте, только если узнаёте этот сервер.</string>
+    <string name="ssl_continue">Продолжить</string>
+    <string name="ssl_cancel">Отмена</string>
+</resources>

@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.net.http.SslError;
 import android.os.Bundle;
 import android.os.Build;
 import android.view.View;
@@ -40,27 +41,27 @@ public final class MainActivity extends Activity {
         LinearLayout bar = new LinearLayout(this);
         address = new EditText(this);
         address.setSingleLine(true);
-        address.setHint("https://tu-servidor o enlace de invitación");
+        address.setHint(getString(R.string.hint_server));
         address.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
         address.setText(getPreferences(0).getString("server", ""));
         bar.addView(address, new LinearLayout.LayoutParams(0, -2, 1));
-        Button open = new Button(this); open.setText("Abrir");
+        Button open = new Button(this); open.setText(getString(R.string.open));
         open.setOnClickListener(v -> open(address.getText().toString().trim()));
         bar.addView(open);
-        Button browser = new Button(this); browser.setText("Navegador");
+        Button browser = new Button(this); browser.setText(getString(R.string.browser));
         browser.setOnClickListener(v -> {
             String url = web == null ? address.getText().toString().trim() : web.getUrl();
             if (valid(Uri.parse(url == null ? "" : url))) external(Uri.parse(url));
         });
         bar.addView(browser);
-        backgroundButton = new Button(this); backgroundButton.setText("Segundo plano");
+        backgroundButton = new Button(this); backgroundButton.setText(getString(R.string.background));
         backgroundButton.setOnClickListener(v -> {
             if (backgroundEnabled) { disableBackground(); return; }
             if (web == null || !sameOrigin(Uri.parse(web.getUrl() == null ? "" : web.getUrl()))) {
-                message("Abre tu sala antes de activar el segundo plano"); return;
+                message(getString(R.string.bg_need_room)); return;
             }
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                message("Activa el micrófono de la sala y concede el permiso antes de habilitar el segundo plano"); return;
+                message(getString(R.string.bg_need_mic)); return;
             }
             if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 12); return;
@@ -73,7 +74,7 @@ public final class MainActivity extends Activity {
         root.addView(bar);
         root.addView(backgroundBar);
         TextView help = new TextView(this);
-        help.setText("Conecta tu servidor HTTPS. Entra a la sala y activa Segundo plano para mantener audio y conexión al usar otras apps. Android puede pausar la cámara. Para compartir pantalla, usa un navegador compatible.");
+        help.setText(getString(R.string.help));
         help.setPadding(12, 8, 12, 8); root.addView(help);
         setContentView(root);
     }
@@ -83,16 +84,20 @@ public final class MainActivity extends Activity {
             && u.getUserInfo() == null && !u.toString().contains("\\");
     }
     private static int port(Uri u) { return u.getPort() == -1 ? 443 : u.getPort(); }
+    private static String originOf(String url) {
+        Uri u = Uri.parse(url == null ? "" : url);
+        return u.getScheme() + "://" + u.getHost() + (u.getPort() == -1 ? "" : ":" + u.getPort());
+    }
     private boolean sameOrigin(Uri u) {
         return trusted != null && valid(u) && trusted.getHost().equalsIgnoreCase(u.getHost()) && port(trusted) == port(u);
     }
     private void external(Uri u) {
         try { startActivity(new Intent(Intent.ACTION_VIEW, u)); }
-        catch (android.content.ActivityNotFoundException e) { message("No hay un navegador instalado"); }
+        catch (android.content.ActivityNotFoundException e) { message(getString(R.string.no_browser)); }
     }
     private void open(String url) {
         Uri u = Uri.parse(url);
-        if (!valid(u)) { message("Usa una URL HTTPS con un certificado válido"); return; }
+        if (!valid(u)) { message(getString(R.string.bad_url)); return; }
         disableBackground();
         denyPending();
         if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
@@ -116,7 +121,23 @@ public final class MainActivity extends Activity {
                 if (r.isForMainFrame() && r.hasGesture() && valid(r.getUrl())) external(r.getUrl());
                 return true;
             }
-            // The default SSL handler cancels invalid certificates. Never bypass it.
+            // Untrusted certificates (e.g. the server's LAN self-signed mode) are
+            // never bypassed silently: the user confirms per origin, and only that
+            // origin is remembered. Everything else keeps the default cancel.
+            @Override public void onReceivedSslError(WebView v, SslErrorHandler handler, SslError error) {
+                String origin = originOf(error.getUrl());
+                if (getPreferences(0).getBoolean("ssl_trust_" + origin, false)) { handler.proceed(); return; }
+                new android.app.AlertDialog.Builder(MainActivity.this)
+                    .setTitle(R.string.ssl_title)
+                    .setMessage(getString(R.string.ssl_message, Uri.parse(error.getUrl() == null ? "" : error.getUrl()).getHost()))
+                    .setPositiveButton(R.string.ssl_continue, (d, w) -> {
+                        getPreferences(0).edit().putBoolean("ssl_trust_" + origin, true).apply();
+                        handler.proceed();
+                    })
+                    .setNegativeButton(R.string.ssl_cancel, (d, w) -> handler.cancel())
+                    .setOnCancelListener(d -> handler.cancel())
+                    .show();
+            }
             @Override public void onPageFinished(WebView v, String url) {
                 getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             }
@@ -191,7 +212,7 @@ public final class MainActivity extends Activity {
     @Override protected void onStart() {
         super.onStart(); active = true;
         if (backgroundEnabled && !CallAudioService.running) disableBackground();
-        if (web != null && resumeURL != null) { web.loadUrl(resumeURL); resumeURL = null; }
+        if (web != null && resumeURL != null) { web.loadUrl(resumeURL); resumeURL = null; message(getString(R.string.restart_notice)); }
     }
     @Override protected void onStop() {
         active = false; denyPending();
@@ -214,14 +235,14 @@ public final class MainActivity extends Activity {
         try {
             Intent service = new Intent(this, CallAudioService.class);
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(service); else startService(service);
-            backgroundEnabled = true; backgroundButton.setText("Segundo plano: activo");
+            backgroundEnabled = true; backgroundButton.setText(getString(R.string.background_on));
         } catch (IllegalStateException | SecurityException e) {
-            disableBackground(); message("Android no permitió activar el audio en segundo plano. Inténtalo con la sala visible.");
+            disableBackground(); message(getString(R.string.bg_failed));
         }
     }
     private void disableBackground() {
         backgroundEnabled = false;
         stopService(new Intent(this, CallAudioService.class));
-        if (backgroundButton != null) backgroundButton.setText("Segundo plano");
+        if (backgroundButton != null) backgroundButton.setText(getString(R.string.background));
     }
 }
