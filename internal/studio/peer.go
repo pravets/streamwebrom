@@ -53,6 +53,8 @@ type Msg struct {
 	Text   string          `json:"text,omitempty"`
 	Error  string          `json:"error,omitempty"`
 	ReqID  string          `json:"reqId,omitempty"`
+	To     string          `json:"to,omitempty"` // dm: recipient peer id (also set on the sender's echo)
+	ID     string          `json:"id,omitempty"` // chat-deleted: the removed comment id
 
 	// state
 	State    *State                 `json:"state,omitempty"`
@@ -60,6 +62,7 @@ type Msg struct {
 	Streams  []sfu.Info             `json:"streams,omitempty"`
 	Peer     *PeerInfo              `json:"peer,omitempty"`
 	Chat     []Comment              `json:"chat,omitempty"`
+	Dms      []Comment              `json:"dms,omitempty"` // welcome: this peer's direct-message history
 	Comment  *Comment               `json:"comment,omitempty"`
 	ICE      []webrtc.ICEServer     `json:"ice,omitempty"`
 	LocalICE []webrtc.ICEServer     `json:"localIce,omitempty"`

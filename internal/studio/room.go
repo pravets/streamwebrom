@@ -4,6 +4,7 @@
 package studio
 
 import (
+	"cmp"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -55,6 +56,7 @@ type Comment struct {
 	Sticker string `json:"sticker,omitempty"`
 	PeerID  string `json:"peerId,omitempty"` // author, so clients can tell their own messages
 	Role    Role   `json:"role,omitempty"`   // author's role ("host" gets a badge)
+	To      string `json:"to,omitempty"`     // dm recipient peer id; empty for room chat
 }
 
 // Brand controls the look of the program output.
@@ -93,6 +95,9 @@ type State struct {
 	Hidden     map[string]bool    `json:"hidden"`     // stream id -> video hidden, audio kept
 	Bandwidth  string             `json:"bandwidth"`  // eco | balanced | quality; applies to camera/screen senders
 	Connection string             `json:"connection"` // local by default; cloudflare requires host/master authorization
+	// DMPolicy gates direct messages: all (default), host-only (guests may
+	// only write to a host) or off. Empty means all.
+	DMPolicy string `json:"dmPolicy,omitempty"`
 }
 
 // Scene is a saved layout + stage combination (one-click switching).
@@ -129,6 +134,8 @@ type Room struct {
 	publishing     map[string]bool
 	state          State
 	chat           []Comment
+	dms            map[string][]Comment // conversation key (sorted peer ids) -> history
+	dmPeerByPass   map[string]string    // rejoin pass -> last peer id, so dm history survives reconnects
 	emptyAt        time.Time
 	restream       *restream.Session
 	starting       bool // a go-live is being set up (guards against double start)
@@ -187,7 +194,7 @@ func newRoom(id, guestPassword string, lobby bool, title string) (*Room, Keys, e
 		viewKey: token(16), pushKey: token(20), inviteKey: token(16),
 		peers: map[string]*Peer{}, waiting: map[string]*Peer{}, passes: map[string]bool{}, streams: map[string]*sfu.Stream{},
 		emptyAt: time.Now(), participants: map[string]string{}, savedSources: map[string]sfu.Info{}, streamOwners: map[string]string{},
-		state: State{Title: title, Layout: "grid", Lobby: lobby, Connection: "local", Bandwidth: "balanced", Scenes: map[string]Scene{},
+		state: State{Title: title, Layout: "grid", Lobby: lobby, Connection: "local", Bandwidth: "balanced", DMPolicy: "all", Scenes: map[string]Scene{},
 			Labels: map[string]string{},
 			Brand:  Brand{Color: "#7c5cff", Background: "#0b0b12", Theme: "bubble", ShowNames: true}},
 	}
@@ -534,6 +541,94 @@ func (r *Room) history() []Comment {
 	return append([]Comment(nil), r.chat...)
 }
 
+// addDM stores a direct message in its conversation, capped like the room chat.
+func (r *Room) addDM(c Comment) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dms == nil {
+		r.dms = map[string][]Comment{}
+	}
+	key := dmKey(c.PeerID, c.To)
+	r.dms[key] = append(r.dms[key], c)
+	if len(r.dms[key]) > 200 {
+		r.dms[key] = r.dms[key][len(r.dms[key])-200:]
+	}
+}
+
+// dmHistory returns every conversation this peer takes part in, oldest first.
+func (r *Room) dmHistory(peerID string) []Comment {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []Comment
+	for key, msgs := range r.dms {
+		a, b, ok := strings.Cut(key, "|")
+		if ok && (a == peerID || b == peerID) {
+			out = append(out, msgs...)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b Comment) int { return cmp.Compare(a.TS, b.TS) })
+	return out
+}
+
+// deleteComment removes one message by id from the room chat or a dm
+// conversation. It reports where the message lived so the hub can notify
+// exactly the affected peers: everyone for chat, the pair for a dm.
+func (r *Room) deleteComment(id string) (inChat bool, pair [2]string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, c := range r.chat {
+		if c.ID == id {
+			r.chat = slices.Delete(r.chat, i, i+1)
+			return true, [2]string{}, true
+		}
+	}
+	for key, msgs := range r.dms {
+		for i, c := range msgs {
+			if c.ID == id {
+				r.dms[key] = slices.Delete(msgs, i, i+1)
+				if len(r.dms[key]) == 0 {
+					delete(r.dms, key)
+				}
+				a, b, _ := strings.Cut(key, "|")
+				return false, [2]string{a, b}, true
+			}
+		}
+	}
+	return false, [2]string{}, false
+}
+
+// rebindDMLocked moves a reconnecting guest's conversations from their old
+// peer id to the new one, so dm history follows the rejoin pass the way stage
+// slots do. Callers hold r.mu.
+func (r *Room) rebindDMLocked(oldID, newID string) {
+	for key, msgs := range r.dms {
+		a, b, ok := strings.Cut(key, "|")
+		if !ok || (a != oldID && b != oldID) {
+			continue
+		}
+		delete(r.dms, key)
+		if a == oldID {
+			a = newID
+		}
+		if b == oldID {
+			b = newID
+		}
+		for i := range msgs {
+			if msgs[i].PeerID == oldID {
+				msgs[i].PeerID = newID
+			}
+			if msgs[i].To == oldID {
+				msgs[i].To = newID
+			}
+		}
+		nk := dmKey(a, b)
+		r.dms[nk] = append(r.dms[nk], msgs...)
+		if len(r.dms[nk]) > 200 {
+			r.dms[nk] = r.dms[nk][len(r.dms[nk])-200:]
+		}
+	}
+}
+
 var errFull = Userf("room_full", "room is full")
 
 // maxPasses bounds the rejoin passes a room remembers.
@@ -547,11 +642,20 @@ func (r *Room) issuePass(p *Peer) string {
 		if len(r.passes) >= maxPasses && !r.persistent {
 			r.passes = map[string]bool{}
 			r.participants = map[string]string{}
+			r.dmPeerByPass = map[string]string{}
 		}
 		p.pass = token(24)
 		r.passes[p.pass] = true
 	}
 	r.participants[p.pass] = p.Name
+	// A reconnect gets a fresh peer id: carry the dm conversations over.
+	if old := r.dmPeerByPass[p.pass]; old != "" && old != p.ID {
+		r.rebindDMLocked(old, p.ID)
+	}
+	if r.dmPeerByPass == nil {
+		r.dmPeerByPass = map[string]string{}
+	}
+	r.dmPeerByPass[p.pass] = p.ID
 	return p.pass
 }
 
@@ -560,6 +664,7 @@ func (r *Room) revokePass(p *Peer) {
 	r.mu.Lock()
 	delete(r.participants, p.pass)
 	delete(r.passes, p.pass)
+	delete(r.dmPeerByPass, p.pass)
 	p.pass = ""
 	r.mu.Unlock()
 }

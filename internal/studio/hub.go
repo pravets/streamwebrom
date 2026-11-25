@@ -434,6 +434,8 @@ func (h *Hub) handle(ctx context.Context, p *Peer, m Msg) error {
 		r.addChat(c)
 		r.broadcast(Msg{Type: "chat", Comment: &c, PeerID: p.ID}, "")
 		return nil
+	case "dm":
+		return h.dm(p, m)
 	case "latency":
 		return h.latency(p, m.Value)
 	case "media":
@@ -474,6 +476,56 @@ func (h *Hub) handle(ctx context.Context, p *Peer, m Msg) error {
 		return fmt.Errorf("%s requires host", m.Type)
 	}
 	return h.hostAction(p, m)
+}
+
+// dm delivers a direct message to exactly one peer, plus an echo to the
+// sender so their UI can show the outgoing message. Viewers never take part
+// (sending or receiving); the lobby gate in handle already rejected waiting
+// peers. History lives in the room, keyed by the sorted pair of peer ids.
+func (h *Hub) dm(p *Peer, m Msg) error {
+	r := p.room
+	role := p.role()
+	if role == RoleViewer {
+		return Userf("dm_viewer", "viewers cannot send direct messages")
+	}
+	switch dmPolicyOf(r.Snapshot()) {
+	case "off":
+		return Userf("dm_disabled", "direct messages are disabled in this room")
+	case "host-only":
+		if role != RoleHost {
+			target := h.peerByID(r, m.To)
+			if target == nil || target.role() != RoleHost {
+				return Userf("dm_host_only", "guests can only message the host")
+			}
+		}
+	}
+	if m.To == "" || m.To == p.ID {
+		return errors.New("invalid dm target")
+	}
+	target := h.peerByID(r, m.To)
+	if target == nil {
+		return errors.New("peer not found")
+	}
+	if tr := target.role(); tr != RoleHost && tr != RoleGuest {
+		return Userf("dm_target_unavailable", "that participant cannot receive direct messages")
+	}
+	c := Comment{ID: token(8), From: p.Name, Source: "dm", TS: time.Now().UnixMilli(), PeerID: p.ID, Role: role, To: target.ID}
+	if m.Kind == "sticker" {
+		if !validSticker(m.Text) {
+			return errors.New("unknown sticker")
+		}
+		c.Sticker = m.Text
+	} else {
+		c.Text = limit(strings.TrimSpace(m.Text), 500)
+		if c.Text == "" {
+			return nil
+		}
+	}
+	r.addDM(c)
+	out := Msg{Type: "dm", Comment: &c, PeerID: p.ID, To: target.ID}
+	target.Send(out)
+	p.Send(out) // echo for the sender's UI
+	return nil
 }
 
 func (h *Hub) join(p *Peer, m Msg) error {
@@ -622,6 +674,11 @@ func (h *Hub) welcome(p *Peer) {
 			defer p.Send(Msg{Type: "knock", PeerID: wp.ID, Name: wp.Name})
 		}
 		r.mu.RUnlock()
+	}
+	// After issuePass: a rejoin rebinds the guest's dm conversations to their
+	// fresh peer id, and the catch-up must see the rebound history.
+	if role != RoleViewer {
+		w.Dms = r.dmHistory(p.ID)
 	}
 	p.Send(w)
 	if role != RoleViewer {
@@ -1066,6 +1123,25 @@ func (h *Hub) hostAction(host *Peer, m Msg) error {
 			p.Send(Msg{Type: "request", Action: m.Action, Value: m.Value})
 		}
 		return nil
+	case "chat-delete": // moderation: remove one message by Comment.ID
+		inChat, pair, ok := r.deleteComment(m.Target)
+		if !ok {
+			return errors.New("comment not found")
+		}
+		if inChat {
+			r.broadcast(Msg{Type: "chat-deleted", ID: m.Target}, "")
+		} else {
+			for _, id := range pair {
+				if p := h.peerByID(r, id); p != nil {
+					p.Send(Msg{Type: "chat-deleted", ID: m.Target})
+				}
+			}
+		}
+		// A deleted message must not stay featured on the program output.
+		if st := r.Snapshot(); st.Comment != nil && st.Comment.ID == m.Target {
+			_ = r.Update(func(st *State) error { st.Comment = nil; return nil })
+		}
+		return nil
 	case "state":
 		return h.setState(r, m)
 	case "record":
@@ -1272,6 +1348,14 @@ func (h *Hub) setState(r *Room, m Msg) error {
 						return errors.New("too many hidden entries")
 					}
 					st.Hidden = hm
+				}
+			case "dmPolicy": // who may send direct messages: all | host-only | off
+				var pol string
+				if err = json.Unmarshal(v, &pol); err == nil {
+					if !slices.Contains(DMPolicies, pol) {
+						return errors.New("invalid dm policy")
+					}
+					st.DMPolicy = pol
 				}
 			default:
 				return fmt.Errorf("unknown state key %q", k)
