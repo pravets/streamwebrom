@@ -588,7 +588,7 @@ function renderBackstage() {
       el("span", { class: "name", text: ((state.labels && state.labels[id]) || s.name + (s.kind === "screen" ? t("studiojs.screenSuffix") : "")) + (owner && owner.mic === false ? " 🔇" : "") }),
       el("div", { class: "source-quick-actions" },
         el("button", { class: "stagebtn " + (onStage(id) ? "on" : ""), onclick: () => toggleStage(id), text: onStage(id) ? t("studiojs.stageRemove") : (editScene === "1" ? t("studiojs.toStage") : t("studiojs.toScene", { n: editScene })) }),
-        el("button", { class: "stagebtn accentbtn " + (accented ? "on" : ""), title: t("studiojs.quickAccentTitle"), onclick: () => setScene(editScene, quickAccent(sceneOf(editScene), id)), text: accented ? t("studiojs.quickUnaccent") : t("studiojs.quickAccent") }),
+        el("button", { class: "accentbtn " + (accented ? "on" : ""), title: t("studiojs.quickAccentTitle"), onclick: () => setScene(editScene, quickAccent(sceneOf(editScene), id)), text: accented ? t("studiojs.quickUnaccent") : t("studiojs.quickAccent") }),
         el("button", { class:"source-options", "aria-haspopup":"dialog", onclick:() => openSourceSettings(id), text:t("studiojs.options") }),
         el("div", { class: "tilevolrow" },
           el("button", { class: "quickicon" + (progMuted ? " off" : ""), onclick: () => toggleMap("muted", id), title: progMuted ? t("studiojs.unmuteProgram") : t("studiojs.muteProgram"), "aria-label": progMuted ? t("studiojs.unmuteProgram") : t("studiojs.muteProgram"), "aria-pressed": String(progMuted), text: progMuted ? "🔇" : "🔊" }),
