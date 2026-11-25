@@ -1,6 +1,8 @@
 package restream
 
 import (
+	"bytes"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
@@ -34,6 +36,47 @@ func TestStatsNeverExposeDestinationKeys(t *testing.T) {
 	status := s.Status()
 	if strings.Contains(status.LastError, "secret-key") || status.Stats != "30 fps · 4000k · 00:00:05" {
 		t.Fatalf("unsafe or invalid status: %+v", status)
+	}
+}
+
+func TestScrubSecrets(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"[tee] Unable to open rtmp://a.example/live/secret-key", "[tee] Unable to open rtmp://***"},
+		{"rtmps://b.example/app/key?password=hunter2 failed", "rtmps://*** failed"},
+		{"srt://c.example:9000?streamid=abc&passphrase=xyz", "srt://***"},
+		{"Output url key=abc123 rejected", "Output url key=*** rejected"},
+		{"Non-monotonous DTS in output stream 0:1", "Non-monotonous DTS in output stream 0:1"},
+	}
+	for _, c := range cases {
+		if got := scrubSecrets(c.in); got != c.want {
+			t.Fatalf("scrubSecrets(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestReadStatsClearsStaleErrorWhenProgressResumes(t *testing.T) {
+	s := &Session{}
+	s.readStats(strings.NewReader("Non-monotonous DTS in output stream 0:1\nfps=14.26\nbitrate=N/A\nout_time=00:15:55.157333\nprogress=continue\n"))
+	st := s.Status()
+	if st.LastError != "" {
+		t.Fatalf("stale error pinned: %q", st.LastError)
+	}
+	if st.Stats != "14.26 fps · N/A · 00:15:55.157333" {
+		t.Fatalf("stats: %q", st.Stats)
+	}
+}
+
+func TestReadStatsLogsScrubbedCause(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Session{log: slog.New(slog.NewTextHandler(&buf, nil)), stream: "program"}
+	s.readStats(strings.NewReader("[tee] Unable to open rtmp://example/live/secret-key\n"))
+	st := s.Status()
+	if st.LastError == "" || strings.Contains(st.LastError, "secret-key") {
+		t.Fatalf("indicator: %q", st.LastError)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "ffmpeg stderr") || !strings.Contains(out, "rtmp://***") || strings.Contains(out, "secret-key") {
+		t.Fatalf("journal must carry the scrubbed cause: %q", out)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +81,9 @@ type Session struct {
 	status  Status
 	conns   []*net.UDPConn
 	removes []func()
+	log     *slog.Logger
+	stream  string
+	targets []string
 }
 
 // Status returns a snapshot.
@@ -189,6 +193,9 @@ func BuildArgs(videoMime string, dests []Destination, st Settings) []string {
 
 // Start launches the restream for stream s.
 func Start(ffmpeg string, s *sfu.Stream, dests []Destination, st Settings, log *slog.Logger) (*Session, error) {
+	if log == nil {
+		log = slog.Default()
+	}
 	if len(dests) == 0 || len(dests) > 16 {
 		return nil, errors.New("expected 1-16 destinations")
 	}
@@ -273,6 +280,9 @@ func Start(ffmpeg string, s *sfu.Stream, dests []Destination, st Settings, log *
 		names = append(names, d.Name)
 	}
 	sess.status = Status{Live: true, Since: time.Now().Unix(), Targets: names}
+	sess.log = log
+	sess.stream = s.ID
+	sess.targets = names
 	go sess.readStats(stderr)
 	go func() {
 		err := cmd.Wait()
@@ -288,7 +298,7 @@ func Start(ffmpeg string, s *sfu.Stream, dests []Destination, st Settings, log *
 			sess.status.LastError = err.Error()
 		}
 		sess.mu.Unlock()
-		log.Info("restream ended", "stream", s.ID, "err", err)
+		log.Info("restream ended", "stream", s.ID, "err", err, "targets", names)
 		close(sess.done)
 	}()
 	s.OnClose(func() { cancel() })
@@ -300,14 +310,21 @@ func (s *Session) readStats(r io.Reader) {
 	if r == nil {
 		return
 	}
+	log := s.log
+	if log == nil {
+		log = slog.Default()
+	}
 	sc := bufio.NewScanner(r)
 	stats := map[string]string{}
 	for sc.Scan() {
 		line := sc.Text()
 		k, v, ok := strings.Cut(line, "=")
 		if !ok {
+			// ffmpeg diagnostics can contain complete RTMP URLs and stream
+			// keys: log them scrubbed so a failed start keeps its cause in
+			// the journal, and show the studio a generic indicator.
+			log.Info("ffmpeg stderr", "stream", s.stream, "line", scrubSecrets(line))
 			s.mu.Lock()
-			// ffmpeg diagnostics can contain complete RTMP URLs and stream keys.
 			s.status.LastError = "ffmpeg reported an error; check the destination and connection"
 			s.mu.Unlock()
 			continue
@@ -321,9 +338,28 @@ func (s *Session) readStats(r io.Reader) {
 		if k == "progress" {
 			s.mu.Lock()
 			s.status.Stats = fmt.Sprintf("%s fps · %s · %s", stats["fps"], stats["bitrate"], stats["out_time"])
+			if v == "continue" {
+				// Media flows again: one stray warning must not pin the
+				// error indicator for the whole session.
+				s.status.LastError = ""
+			}
 			s.mu.Unlock()
 		}
 	}
+}
+
+// secretURL matches destination URLs (which embed stream keys) and secretKV
+// matches key/password style parameters inside ffmpeg diagnostics.
+var (
+	secretURL = regexp.MustCompile(`(?i)\b(rtmps?|srt|rtsp|https?)://[^\s"'|]+`)
+	secretKV  = regexp.MustCompile(`(?i)\b(key|streamkey|stream_key|password|passwd|secret|token|auth)=([^\s&"'|]+)`)
+)
+
+// scrubSecrets replaces destination URLs and credential parameters with ***
+// so ffmpeg stderr can be logged without leaking stream keys.
+func scrubSecrets(line string) string {
+	line = secretURL.ReplaceAllString(line, "$1://***")
+	return secretKV.ReplaceAllString(line, "$1=***")
 }
 
 func trim(s string, n int) string {
