@@ -34,7 +34,9 @@ with sync_playwright() as pw:
     expect(guest.locator('#connection')).to_be_hidden(timeout=20000)
     expect(guest.locator('#screenBtn')).to_be_disabled()
     expect(host.locator('#backstage .tile')).to_have_count(1,timeout=20000)
-    host.locator('#backstage .stagebtn').click()
+    _btn = host.locator('#backstage .stagebtn')
+    _btn.evaluate("el => el.scrollIntoView({block:'center'})")
+    _btn.click()
     expect(guest.locator('#screenBtn')).to_be_enabled()
 
     # Requesting must never open a display picker or publish a screen.
@@ -63,7 +65,9 @@ with sync_playwright() as pw:
     screen=host.locator('#backstage [data-kind="screen"]')
     expect(screen).to_have_count(1,timeout=20000)
     screen_id=screen.get_attribute('data-id')
-    screen.locator('.stagebtn').click()
+    _btn = screen.locator('.stagebtn')
+    _btn.evaluate("el => el.scrollIntoView({block:'center'})")
+    _btn.click()
     obs=context.new_page();obs.on('pageerror',lambda e:errors.append(str(e)))
     obs.goto(args.url+'/view?room='+keys['room']+'&stream='+screen_id+'&mute=1#key='+keys['viewKey'])
     obs.wait_for_function("()=>{const v=document.querySelector('#single');return v.videoWidth>0&&v.readyState>=2}",timeout=20000)
@@ -91,13 +95,17 @@ with sync_playwright() as pw:
     # Removing the guest from all scenes automatically revokes the grant.
     authorize();guest.locator('#startScreen').click();guest.locator('#confirmShare').click()
     expect(screen).to_have_count(1,timeout=20000)
-    host.locator('#backstage [data-kind="camera"] .stagebtn').click()
+    _btn = host.locator('#backstage [data-kind="camera"] .stagebtn')
+    _btn.evaluate("el => el.scrollIntoView({block:'center'})")
+    _btn.click()
     expect(screen).to_have_count(0,timeout=15000)
     expect(guest.locator('#screenBtn')).to_be_disabled()
     assert guest.evaluate('__captures.every(t=>t.readyState==="ended")')
 
     # Restore stage membership and check that leaving releases an active share.
-    host.locator('#backstage [data-kind="camera"] .stagebtn').click()
+    _btn = host.locator('#backstage [data-kind="camera"] .stagebtn')
+    _btn.evaluate("el => el.scrollIntoView({block:'center'})")
+    _btn.click()
     authorize();guest.locator('#startScreen').click();guest.locator('#confirmShare').click()
     expect(screen).to_have_count(1,timeout=20000)
     if args.screenshots:

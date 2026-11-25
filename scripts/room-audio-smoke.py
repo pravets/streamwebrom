@@ -131,7 +131,9 @@ with tempfile.TemporaryDirectory(prefix='swr-multiparty-') as folder,sync_playwr
         scene.wait_for_timeout(150)
     assert scene_ready,'Screen audio was not audible in the OBS scene'
     # An authorized panelist also shares audio to the host and other panelists.
-    host.locator('#backstage [data-id="'+ids[1]+'"] .stagebtn').click()
+    _btn = host.locator('#backstage [data-id="'+ids[1]+'"] .stagebtn')
+    _btn.evaluate("el => el.scrollIntoView({block:'center'})")
+    _btn.click()
     guests[0].locator('#screenBtn').click();host.get_by_role('button',name='Autorizar pantalla',exact=True).click();guests[0].locator('#startScreen').click();guests[0].locator('#confirmShare').click()
     guest_screen=host.locator('#backstage [data-kind="screen"]:not([data-id="host-screen"])');expect(guest_screen).to_have_count(1,timeout=30000);screen_id=guest_screen.get_attribute('data-id')
     advancing(host,'[data-id="'+screen_id+'"] video')

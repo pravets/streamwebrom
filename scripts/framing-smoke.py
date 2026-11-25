@@ -41,7 +41,9 @@ with sync_playwright() as pw:
       sig.send({type:'media',cam:true,mic:false});
     }""", keys)
     expect(host.locator('#backstage [data-id="portrait"] video')).to_be_visible(timeout=20000)
-    host.locator('#backstage [data-id="portrait"] .stagebtn').click()
+    _btn = host.locator('#backstage [data-id="portrait"] .stagebtn')
+    _btn.evaluate("el => el.scrollIntoView({block:'center'})")
+    _btn.click()
     host.locator('#status').click()
     host.mouse.move(0,0)
     # Controls now live below the camera or in the enlarged options dialog.
