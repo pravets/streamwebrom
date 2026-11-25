@@ -1,7 +1,9 @@
 // Shared sender limits. These do not change the 16:9 compositor/OBS raster.
 export function senderProfile(mode, opts = {}, settings = {}) {
   const raw = { videoKbps: opts.videoKbps || 4000, audioKbps: opts.audioKbps || 128, fps: opts.fps || 30, scale: 1 };
-  if (mode === "quality" || opts.kind === "program") return raw;
+  // Explicit per-source tuning (director panel, guest panel, URL params) and
+  // local content (program, media files) override the room bandwidth caps.
+  if (mode === "quality" || opts.kind === "program" || opts.kind === "media" || opts.explicit) return raw;
   const eco = mode === "eco", screen = opts.kind === "screen";
   const height = screen ? 1080 : eco ? 540 : 720;
   const w = Number(settings.width) || 0, h = Number(settings.height) || 0;

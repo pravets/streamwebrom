@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,6 +76,7 @@ type Recording struct {
 type Recorder struct {
 	Dir    string
 	FFmpeg string
+	Log    *slog.Logger // optional; defaults to slog.Default()
 
 	mu     sync.Mutex
 	active map[string]*Recording // key room/stream
@@ -123,7 +125,7 @@ func (r *Recorder) Start(room string, s *sfu.Stream) (*Recording, error) {
 		lw := &lockedWriter{w: w}
 		rec.writers = append(rec.writers, lw)
 		rec.Files = append(rec.Files, path)
-		rec.removes = append(rec.removes, f.AddSink(lw))
+		rec.removes = append(rec.removes, f.AddReliableSink(lw))
 	}
 	if len(rec.writers) == 0 {
 		return nil, errors.New("stream has no tracks yet")
@@ -190,13 +192,22 @@ func (r *Recorder) Stop(room, stream string) (*Recording, error) {
 	// fix the header before the muxer copies it into the .mkv.
 	for _, f := range rec.Files {
 		if strings.HasSuffix(f, ".ivf") {
-			_ = fixIVFSize(f, r.probe())
+			if err := fixIVFSize(f, r.probe()); err != nil {
+				r.logger().Warn("record: ivf frame size fix failed", "file", f, "err", err)
+			}
 		}
 	}
 	if out, err := r.mux(rec); err == nil {
 		rec.Output = out
 	}
 	return rec, nil
+}
+
+func (r *Recorder) logger() *slog.Logger {
+	if r.Log != nil {
+		return r.Log
+	}
+	return slog.Default()
 }
 
 // probe returns the ffprobe binary that sits next to the configured ffmpeg.

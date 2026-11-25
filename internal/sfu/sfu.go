@@ -197,6 +197,99 @@ func (s *meteredSink) WriteRTP(p *rtp.Packet) error {
 	return err
 }
 
+// Queue depths: realtime sinks stay shallow so a slow consumer adds at most
+// ~2.5s of latency at 100 pkt/s before dropping; reliable sinks (recording)
+// get a deep buffer so a disk hiccup never loses media.
+const (
+	realtimeQueueDepth = 256
+	reliableQueueDepth = 8192
+)
+
+// sinkQueue decouples the publisher read loop from one sink's writes: a
+// bounded channel plus a dedicated writer goroutine. A slow realtime sink
+// (congested viewer, TURN relay) can no longer stall the fan-out and distort
+// the arrival times the TWCC generator reports to the publisher.
+type sinkQueue struct {
+	w        Sink
+	ch       chan *rtp.Packet
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
+	reliable bool
+}
+
+func newSinkQueue(w Sink, reliable bool) *sinkQueue {
+	depth := realtimeQueueDepth
+	if reliable {
+		depth = reliableQueueDepth
+	}
+	sq := &sinkQueue{
+		w:        w,
+		ch:       make(chan *rtp.Packet, depth),
+		stop:     make(chan struct{}),
+		done:     make(chan struct{}),
+		reliable: reliable,
+	}
+	go sq.writeLoop()
+	return sq
+}
+
+func (s *sinkQueue) writeLoop() {
+	defer close(s.done)
+	for {
+		select {
+		case p := <-s.ch:
+			_ = s.w.WriteRTP(p)
+		case <-s.stop:
+			if s.reliable {
+				// Flush everything queued before detaching: a recording
+				// must not lose its tail when the sink is removed.
+				for {
+					select {
+					case p := <-s.ch:
+						_ = s.w.WriteRTP(p)
+					default:
+						return
+					}
+				}
+			}
+			return
+		}
+	}
+}
+
+// push hands one packet to the writer. Realtime: drop-oldest on overflow
+// (losing a stale packet beats starving every other consumer). Reliable:
+// block until buffered — never drop; the deep queue makes this rare.
+func (s *sinkQueue) push(p *rtp.Packet) {
+	if s.reliable {
+		select {
+		case s.ch <- p:
+		case <-s.stop:
+		}
+		return
+	}
+	select {
+	case s.ch <- p:
+		return
+	case <-s.stop:
+		return
+	default:
+	}
+	// Full: drop the oldest. The read loop is the only producer, so after
+	// freeing one slot the send below cannot block.
+	select {
+	case <-s.ch:
+	default:
+	}
+	select {
+	case s.ch <- p:
+	case <-s.stop:
+	}
+}
+
+func (s *sinkQueue) shutdown() { s.stopOnce.Do(func() { close(s.stop) }) }
+
 // Forwarder fans one incoming track out to many sinks.
 type Forwarder struct {
 	recordTraffic func(int)
@@ -210,27 +303,43 @@ type Forwarder struct {
 	pc     *webrtc.PeerConnection
 
 	mu      sync.RWMutex
-	sinks   map[uint64]Sink
+	sinks   map[uint64]*sinkQueue
 	nextID  uint64
 	packets atomic.Uint64
 	bytes   atomic.Uint64
 }
 
-// AddSink registers a sink and returns a function that removes it.
-func (f *Forwarder) AddSink(s Sink) (remove func()) {
+// AddSink registers a realtime sink (viewers, restream) and returns a
+// function that removes it. When the sink falls behind, its oldest queued
+// packets are dropped so the rest of the fan-out keeps flowing.
+func (f *Forwarder) AddSink(s Sink) (remove func()) { return f.addSink(s, false) }
+
+// AddReliableSink registers a sink that must receive every packet (server
+// recording). It writes in its own goroutine with a deep buffer and never
+// drops; removal flushes the queue before returning, so closing the file
+// afterwards cannot truncate the recording.
+func (f *Forwarder) AddReliableSink(s Sink) (remove func()) { return f.addSink(s, true) }
+
+func (f *Forwarder) addSink(s Sink, reliable bool) (remove func()) {
+	sq := newSinkQueue(s, reliable)
 	f.mu.Lock()
 	f.nextID++
 	id := f.nextID
 	if f.sinks == nil {
-		f.sinks = map[uint64]Sink{}
+		f.sinks = map[uint64]*sinkQueue{}
 	}
-	f.sinks[id] = s
+	f.sinks[id] = sq
 	f.mu.Unlock()
 	f.RequestKeyframe()
 	return func() {
 		f.mu.Lock()
+		entry, ok := f.sinks[id]
 		delete(f.sinks, id)
 		f.mu.Unlock()
+		if ok {
+			entry.shutdown()
+			<-entry.done // reliable sinks finish flushing before the caller closes them
+		}
 	}
 }
 
@@ -255,6 +364,16 @@ func (f *Forwarder) Stats() (packets, bytes uint64) { return f.packets.Load(), f
 func (f *Forwarder) run(log *slog.Logger) {
 	buf := make([]byte, 1500)
 	pkt := &rtp.Packet{}
+	var scratch []*sinkQueue
+	// When the read loop ends, release every sink writer so no goroutine
+	// outlives the forwarder. Reliable sinks flush their queue on shutdown.
+	defer func() {
+		f.mu.RLock()
+		for _, s := range f.sinks {
+			s.shutdown()
+		}
+		f.mu.RUnlock()
+	}()
 	for {
 		n, _, err := f.remote.Read(buf)
 		if err != nil {
@@ -271,16 +390,21 @@ func (f *Forwarder) run(log *slog.Logger) {
 		if f.recordTraffic != nil {
 			f.recordTraffic(n)
 		}
+		// Unmarshal aliases buf, which the next Read overwrites: deep-copy
+		// before handing the packet to asynchronous sink writers.
+		clone := pkt.Clone()
 		f.mu.RLock()
+		scratch = scratch[:0]
 		for _, s := range f.sinks {
-			// Each sink rewrites SSRC/PT as needed; give each its own copy of
-			// the header so they never race on shared state.
-			cp := *pkt
-			if err := s.WriteRTP(&cp); err != nil && !errors.Is(err, io.ErrClosedPipe) {
-				log.Debug("sink write", "err", err)
-			}
+			scratch = append(scratch, s)
 		}
 		f.mu.RUnlock()
+		for _, s := range scratch {
+			// Each sink rewrites SSRC/PT as needed; give each its own copy
+			// of the header so they never race on shared state.
+			cp := *clone
+			s.push(&cp)
+		}
 	}
 }
 
