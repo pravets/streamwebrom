@@ -2,6 +2,11 @@
 // background timer can override an operating system's suspension policy.
 import { t } from "./i18n.js";
 
+// Room playback is muted when the host deafens the guest OR the guest deafens
+// themselves: two independent flags, either one wins. Only the room's <audio>
+// elements are ever muted — outgoing tracks and media are never touched.
+export const effectiveDeafen = (hostDeafen, selfDeafen) => Boolean(hostDeafen || selfDeafen);
+
 export class RoomAudio {
   constructor(onBlocked = () => {}) {
     this.entries = new Map(); this.onBlocked = onBlocked;

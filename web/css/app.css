@@ -295,6 +295,8 @@ label.row { color: var(--text); font-size: 13px; margin-bottom: 0; }
 .call .grid { flex: 1; min-width: 0; min-height: 0; padding: 12px; position: relative; display: block; gap: 8px; align-content: center; justify-content: center; overflow: hidden; }
 .call .grid .tile { position: absolute; min-width: 0; min-height: 0; width: 100%; height: 100%; aspect-ratio: auto; }
 .tile[data-kind="screen"] video { object-fit: contain; }
+.tile[data-kind="media"] video { object-fit: contain; }
+.tile[data-kind="media"].fit-cover video { object-fit: cover; }
 .call .grid .tile.expanded { grid-column: 1 / -1; grid-row: 1; justify-self: center; }
 .call .grid .tile.expanded { order: -1; border-color: var(--accent); }
 .call .grid .tile-focus { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
@@ -615,9 +617,14 @@ body:has(.studio.cinema) #toasts { display:none; }
 .backstage .tile { aspect-ratio: auto; }
 .backstage .tile > video { height: auto; aspect-ratio: 16/9; cursor: zoom-in; }
 .backstage .tile .name, .backstage .tile .scenes { bottom: 51px; }
-.source-quick-actions { position: relative; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px; padding: 6px; background: var(--panel); color: var(--text); }
+.source-quick-actions { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; padding: 6px; background: var(--panel); color: var(--text); }
 .source-quick-actions button { padding: 7px 8px; min-height: 34px; min-width: 0; font-size: 12px; }
 .source-quick-actions .stagebtn.on { background: var(--accent-soft); border-color: var(--accent); }
+.source-quick-actions .accentbtn.on { background: var(--accent-soft); border-color: var(--accent); }
+.source-quick-actions .tilevolrow { position: static; grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; opacity: 1; background: transparent; padding: 0; }
+.source-quick-actions .tilevolrow .quickicon { flex: 0 0 auto; min-height: 28px; padding: 4px 8px; font-size: 14px; line-height: 1; }
+.source-quick-actions .tilevolrow .quickicon.off { background: var(--bad); border-color: transparent; color: #fff; }
+.source-quick-actions .tilevolrow .tilevol { flex: 1 1 auto; min-width: 0; }
 .source-settings-dialog { width: min(940px, 95vw); }
 .source-settings-preview { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 9px; overflow: hidden; }
 .source-settings-preview video { display: block; width: 100%; height: 100%; object-fit: cover; }

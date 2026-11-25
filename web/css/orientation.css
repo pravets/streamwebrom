@@ -1,0 +1,19 @@
+/* Guest call extras that must not touch app.css:
+   - the forced-landscape rotate hint (ticket #14, iOS Safari & friends);
+   - the landscape toolbar button's pressed state;
+   - the self-deafen headphones icon with a slash (ticket #12). */
+
+/* Gentle hint, shown only in portrait when the browser cannot lock orientation. */
+.orientation-hint {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: max(84px, calc(env(safe-area-inset-bottom) + 76px));
+  z-index: 60; max-width: 90vw; padding: 8px 14px; border-radius: 99px;
+  background: rgba(15, 16, 20, .85); color: #fff; font-size: 13px;
+  text-align: center; pointer-events: none;
+}
+
+/* Pressed state for the landscape toggle in the grid toolbar. */
+.call-grid-tools #landscapeBtn[aria-pressed="true"] { background: var(--accent); border-color: transparent; color: #fff; }
+
+/* Headphones with a slash while the guest deafens themselves. */
+#deafenBtn.off { --ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='1' y1='1' x2='23' y2='23'/%3E%3Cpath d='M3 18v-6a9 9 0 0 1 18 0v6'/%3E%3Cpath d='M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z'/%3E%3C/svg%3E"); }

@@ -4,8 +4,8 @@ import { roomTelemetry, metricText } from "./telemetry.js";
 import { relayMonitor } from "./relay-status.js";
 import { mountVdo } from "./vdo.js";
 import { immersive } from "./immersive.js";
-import { Compositor, AudioMixer, accentApplies, ACCENT_LAYOUTS } from "./compositor.js";
-import { chatMessage, appendChat, mountComposer } from "./chat.js";
+import { Compositor, AudioMixer, accentApplies, ACCENT_LAYOUTS, quickAccent } from "./compositor.js";
+import { createChat, GENERAL } from "./chat.js";
 import { listDevices, loadPrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain, QUALITIES, FPS } from "./devices.js";
 import { screenAudioNotice, stopScreenCapture } from "./devices.js";
 import { chooseScreen } from "./screen-share.js";
@@ -195,10 +195,9 @@ function onWelcome(m) {
   $("#bandwidthMode").value = state.bandwidth || "balanced";
   renderInvite();
   if (m.persistence) renderPersistence(m.persistence, true);
-  $("#chatlog").replaceChildren();
   peers = new Map((m.peers || []).map((p) => [p.id, p]));
   for (const s of m.streams || []) addRemote(s.id, s.kind, s.owner, "", s.revision);
-  for (const c of m.chat || []) addChat(c);
+  chatPanel.seed(m.chat || [], m.dms || []);
   renderAll();
 }
 
@@ -217,7 +216,9 @@ sig.on("peer-left", (m) => { const p = peers.get(m.peerId); peers.delete(m.peerI
 sig.on("stream-added", (m) => addRemote(m.info.id, m.info.kind, m.info.owner, m.name, m.info.revision));
 sig.on("stream-updated", (m) => { if (staleRevision(m.info.revision, remoteInfo.get(m.info.id)?.revision)) return; removeSource(m.info.id); addRemote(m.info.id, m.info.kind, m.info.owner, m.name, m.info.revision); });
 sig.on("stream-removed", (m) => removeSource(m.stream, m.revision));
-sig.on("chat", (m) => addChat(m.comment));
+sig.on("chat", (m) => chatPanel.receive(m));
+sig.on("dm", (m) => chatPanel.receive(m));
+sig.on("chat-deleted", (m) => chatPanel.remove(m.id));
 sig.on("knock", (m) => addKnock(m));
 sig.on("knock-cancel", (m) => { if (knocks.delete(m.peerId)) { renderKnocks(); if (m.action !== "admitted") toast(t("studiojs.guestLeftLobby")); } });
 sig.on("reaction", (m) => flyReaction(m.text));
@@ -330,7 +331,7 @@ $("#addCam").onclick = async () => {
 async function addLocalCam(stream, name) {
   let slot=2; while (local.has("host-camera-"+slot)) slot++;
   const cameraSlot = !hostCamId ? "host-camera" : "host-camera-" + slot;
-  const id = await addLocal(stream, "camera", name, { stream: cameraSlot, videoKbps: kbpsFor(Number(prefs.quality)), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 128 });
+  const id = await addLocal(stream, "camera", name, { stream: cameraSlot, videoKbps: kbpsFor(Number(prefs.quality)), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 128, explicit: ["bitrate", "vb", "quality", "height", "h", "fps", "framerate", "fr"].some((n) => params.has(n)) });
   if (id) sources.get(id).mirror = false;
   return id;
 }
@@ -435,6 +436,8 @@ function renderState() {
   document.title = (state.title || room) + " · StreamWebRom";
   $("#showTitle").value = state.title || "";
   $("#lobbyToggle").checked = !!state.lobby;
+  $("#dmPolicy").value = state.dmPolicy || "all";
+  chatPanel.refresh();
   $$("#layouts button").forEach((b) => b.classList.toggle("active", b.dataset.l === sceneOf(editScene).layout));
   renderSceneBar();
   const live = !!state.live;
@@ -552,7 +555,12 @@ function renderSourceSettings() {
   $("#sourceSettingsActions").replaceChildren(...actions);
   const vol = el("input", { type:"range", min:0, max:2, step:.05, value:state.volumes?.[id] ?? 1, "aria-label":t("studiojs.programVolumeAria") });
   vol.onchange = () => setState({ volumes:{ ...(state.volumes || {}), [id]:Number(vol.value) } });
-  $("#sourceSettingsQuality").replaceChildren(...(s.kind === "camera" ? [sourceQuality(id,s)] : []), el("label",{},t("studiojs.programVolume"),vol));
+  const fitSel = el("select", { "aria-label": t("studiojs.mediaFit") },
+    el("option", { value: "contain", text: t("studiojs.fitContain"), "data-i18n": "studiojs.fitContain" }),
+    el("option", { value: "cover", text: t("studiojs.fitCover"), "data-i18n": "studiojs.fitCover" }));
+  fitSel.value = state.fit?.[id] === "cover" ? "cover" : "contain";
+  fitSel.onchange = () => setState({ fit: { ...(state.fit || {}), [id]: fitSel.value } });
+  $("#sourceSettingsQuality").replaceChildren(...(s.kind === "camera" ? [sourceQuality(id,s)] : []), ...(s.kind === "media" ? [el("label",{},t("studiojs.mediaFit"),fitSel)] : []), el("label",{},t("studiojs.programVolume"),vol));
 }
 function renderBackstage() {
   $("#sourceCount").textContent = t("studiojs.sourceCount", { n: sources.size });
@@ -568,10 +576,11 @@ function renderBackstage() {
     }
     if (s.preview.srcObject !== s.stream) { s.preview.srcObject = s.stream; s.preview.play().catch(() => {}); }
     const progMuted = !!state.muted?.[id], hidden = !!state.hidden?.[id];
+    const accented = sceneOf(editScene).featured === id;
     s.preview.onclick = () => openSourceSettings(id);
     s.preview.tabIndex = 0; s.preview.setAttribute("aria-label", t("studiojs.enlargeAria", { name: s.name }));
     s.preview.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSourceSettings(id); } };
-    const tile = el("div", { class: "tile" + (onStage(id) ? " stage" : "") + (progMuted ? " progmuted" : "") + (hidden ? " video-hidden" : ""), "data-id": id, "data-kind": s.kind, "data-peer": s.local ? myId : s.owner },
+    const tile = el("div", { class: "tile" + (onStage(id) ? " stage" : "") + (progMuted ? " progmuted" : "") + (hidden ? " video-hidden" : "") + (s.kind === "media" && state.fit?.[id] === "cover" ? " fit-cover" : ""), "data-id": id, "data-kind": s.kind, "data-peer": s.local ? myId : s.owner },
       s.preview,
       el("span", { class: "tile-latency", title: t("studiojs.rttTitle"), text: t("studiojs.rttPending") }),
       owner?.hand ? el("span", { class: "hand", text: "✋" }) : null,
@@ -579,7 +588,15 @@ function renderBackstage() {
       el("span", { class: "name", text: ((state.labels && state.labels[id]) || s.name + (s.kind === "screen" ? t("studiojs.screenSuffix") : "")) + (owner && owner.mic === false ? " 🔇" : "") }),
       el("div", { class: "source-quick-actions" },
         el("button", { class: "stagebtn " + (onStage(id) ? "on" : ""), onclick: () => toggleStage(id), text: onStage(id) ? t("studiojs.stageRemove") : (editScene === "1" ? t("studiojs.toStage") : t("studiojs.toScene", { n: editScene })) }),
-        el("button", { class:"source-options", "aria-haspopup":"dialog", onclick:() => openSourceSettings(id), text:t("studiojs.options") })));
+        el("button", { class: "stagebtn accentbtn " + (accented ? "on" : ""), title: t("studiojs.quickAccentTitle"), onclick: () => setScene(editScene, quickAccent(sceneOf(editScene), id)), text: accented ? t("studiojs.quickUnaccent") : t("studiojs.quickAccent") }),
+        el("button", { class:"source-options", "aria-haspopup":"dialog", onclick:() => openSourceSettings(id), text:t("studiojs.options") }),
+        el("div", { class: "tilevolrow" },
+          el("button", { class: "quickicon" + (progMuted ? " off" : ""), onclick: () => toggleMap("muted", id), title: progMuted ? t("studiojs.unmuteProgram") : t("studiojs.muteProgram"), "aria-label": progMuted ? t("studiojs.unmuteProgram") : t("studiojs.muteProgram"), "aria-pressed": String(progMuted), text: progMuted ? "🔇" : "🔊" }),
+          el("button", { class: "quickicon" + (hidden ? " off" : ""), onclick: () => toggleMap("hidden", id), title: hidden ? t("studiojs.showVideo") : t("studiojs.hideVideo"), "aria-label": hidden ? t("studiojs.showVideo") : t("studiojs.hideVideo"), "aria-pressed": String(hidden), text: hidden ? "🚫" : "👁️" }),
+          el("input", { class: "tilevol", type: "range", min: 0, max: 2, step: .05, value: state.volumes?.[id] ?? 1, "aria-label": t("studiojs.programVolumeAria"), onchange: (e) => setState({ volumes: { ...(state.volumes || {}), [id]: Number(e.target.value) } }) })
+        )
+      )
+    );
     box.append(tile);
   }
   telemetry.refresh();
@@ -614,6 +631,7 @@ function renderPeople() {
       el("button", { class: "small", onclick: () => sig.send({ type: "request", target: p.id, action: p.cam ? "camoff" : "camon" }), text: p.cam ? t("studiojs.cameraOff") : t("studiojs.askCamera") }),
       p.screenAllowed ? el("button", { class: "small", onclick: () => screenDecision(p.id, "revoke"), text: t("studiojs.revokeScreen") }) : null,
       p.hand ? el("button", { class: "small", onclick: () => sig.send({ type: "request", target: p.id, action: "lowerhand" }), text: t("studiojs.lowerHand") }) : null,
+      el("button", { class: "small", title: t("misc.chatDmTo"), onclick: () => openDM(p.id), text: "✉" }),
       el("button", { class: "small", onclick: () => openRemote(p.id), text: t("studiojs.btnControl") }),
       el("button", { class: "small danger", onclick: () => confirm(t("studiojs.kickConfirm", { name: p.name })) && sig.send({ type: "kick", target: p.id }), text: t("studiojs.kick") })));
   }
@@ -726,17 +744,23 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---------- chat ----------
-let unread = 0;
-function addChat(c) {
-  const show = el("button", { class: "small act", title: t("studiojs.showOnScreen"), onclick: () => setState({ comment: state.comment?.id === c.id ? null : c }), text: "📺" });
-  appendChat($("#chatlog"), chatMessage(c, { myId, actions: [show] }));
-  const chatTab = $('#tabs [data-tab="chat"]');
-  if (chatTab && !chatTab.classList.contains("active") && c.peerId !== myId) { unread++; chatTab.dataset.unread = unread > 99 ? "99+" : String(unread); }
-}
-const chatSend = (x) => sig.send(x.sticker ? { type: "chat", kind: "sticker", text: x.sticker } : { type: "chat", text: x.text });
-const composer = mountComposer($("#chatInput").parentElement, $("#chatInput"), chatSend);
-$("#chatSend").onclick = composer.send;
-$("#chatInput").addEventListener("keydown", (e) => e.key === "Enter" && !e.isComposing && composer.send());
+// General room chat plus one direct conversation per participant. The host
+// may delete any message and feature general comments on the program output.
+const chatPanel = createChat({
+  log: $("#chatlog"), switcher: $("#chatConvos"), input: $("#chatInput"), sendButton: $("#chatSend"),
+  offNote: $("#chatOffNote"),
+  send: (m) => sig.send(m),
+  myId: () => myId, myName: () => "Anfitrión",
+  peers: () => [...peers.values()],
+  canDM: () => (state.dmPolicy || "all") !== "off",
+  policy: () => state.dmPolicy || "all",
+  actionsFor: (c, key) => [
+    key === GENERAL ? el("button", { class: "small act", title: t("studiojs.showOnScreen"), onclick: () => setState({ comment: state.comment?.id === c.id ? null : c }), text: "📺" }) : null,
+    el("button", { class: "small act", title: t("misc.chatDeleteTitle"), onclick: () => sig.send({ type: "chat-delete", target: c.id }), text: "🗑" }),
+  ].filter(Boolean),
+  onUnread: (n) => { const tab = $('#tabs [data-tab="chat"]'); if (n) tab.dataset.unread = n > 99 ? "99+" : String(n); else delete tab.dataset.unread; },
+});
+const openDM = (peerId) => { activateTab("chat"); chatPanel.openDM(peerId); };
 
 // ---------- banners ----------
 $("#bannerAdd").onclick = () => {
@@ -777,6 +801,7 @@ $("#brandSave").onclick = () => {
 };
 $("#titleSave").onclick = () => setState({ title: $("#showTitle").value.trim() });
 $("#lobbyToggle").onchange = (e) => setState({ lobby: e.target.checked });
+$("#dmPolicy").onchange = (e) => setState({ dmPolicy: e.target.value });
 
 // ---------- scenes ----------
 $("#sceneSave").onclick = () => {
@@ -896,7 +921,7 @@ function activateTab(name) {
   studioWorkspace.openPanel();
   $("#activePanelTitle").textContent = $(`#tabs [data-tab="${name}"]`)?.textContent || t("studiojs.panelProduction");
   $$("#tabs button[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
-  if (name === "chat") { unread = 0; delete $('#tabs [data-tab="chat"]').dataset.unread; const l = $("#chatlog"); l.scrollTop = l.scrollHeight; }
+  if (name === "chat") chatPanel.focus();
   $$(".tabpane").forEach((p) => p.classList.toggle("active", p.dataset.pane === name));
   if (name === "obs") renderObs();
 }

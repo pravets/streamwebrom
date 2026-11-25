@@ -30,4 +30,7 @@ export const ru = {
   "effects.fillBlur": "Размытие всего видео",
   "effects.pixelate": "Пикселизация",
   "effects.strength": "Сила эффекта",
+  "effects.fit": "Вписывание в кадр",
+  "effects.fitContain": "Вписать (с полями)",
+  "effects.fitCover": "Заполнить (обрезать)",
 };

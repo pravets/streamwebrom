@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title data-i18n="guest.pageTitle">Unirse · StreamWebRom</title>
-<link rel="icon" href="/img/logo.svg"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#141518"><link rel="apple-touch-icon" href="/img/icon-192.png"><script src="/js/appearance.js"></script><link rel="stylesheet" href="/css/app.css">
+<link rel="icon" href="/img/logo.svg"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#141518"><link rel="apple-touch-icon" href="/img/icon-192.png"><script src="/js/appearance.js"></script><link rel="stylesheet" href="/css/app.css"><link rel="stylesheet" href="/css/orientation.css">
 </head>
 <body>
 <section id="pre" class="prejoin">
@@ -19,6 +19,8 @@
     <div id="pwBox" class="hidden"><label for="pw" data-i18n="guest.passwordLabel">Contraseña</label><input id="pw" type="password" maxlength="128"></div>
     <div id="devPre" class="col"></div>
     <div id="camCtlPre"></div>
+    <label class="row"><input type="checkbox" id="deafenPre"> <span data-i18n="guest.selfDeafen">No escuchar la sala</span></label>
+    <label class="row"><input type="checkbox" id="landscapePre"> <span data-i18n="guest.landscapePre">Pantalla horizontal en el móvil</span></label>
     <details><summary data-i18n="guest.advanced">Opciones avanzadas de conexión</summary>
       <label for="networkMode" data-i18n="guest.connection">Conexión</label>
       <select id="networkMode"><option value="auto" data-i18n="guest.netAuto">Automática (recomendada)</option><option value="tls" data-i18n="guest.netTls">Red móvil: conexión cifrada por 443</option><option value="local" data-i18n="guest.netLocal">Alternativa: relé del equipo anfitrión</option></select>
@@ -35,12 +37,14 @@
     <p id="connectionText"></p>
     <a href="/diagnostics" target="_blank" rel="noopener" data-i18n="guest.diagnosticsLink">Diagnóstico de conexión</a>
   </div>
-  <div class="call-grid-tools"><span id="roomPing" data-i18n-title="guest.roomPingTitle" title="Ping de señalización entre tu equipo y la sala" data-i18n="guest.roomLabel">Sala —</span><div class="row"><button id="networkToggle" class="small" aria-pressed="true" data-i18n="guest.latencies">Latencias</button><button id="reorderGrid" class="small" aria-pressed="false" data-i18n="guest.reorder">Reordenar</button><button id="restoreGrid" class="small hidden" data-i18n="guest.viewAll">Ver todos</button><button id="floatingVideo" class="small hidden" data-i18n="guest.pip">Ventana flotante</button><button id="enableAudio" class="small primary hidden" data-i18n="guest.enableAudio">Activar audio de la sala</button><button id="callFullscreen" class="small" aria-pressed="false" data-i18n="guest.fullscreen">Pantalla completa</button></div></div>
+  <div id="orientationHint" class="orientation-hint hidden" role="status" data-i18n="guest.landscapeHint">Gira el teléfono en horizontal</div>
+  <div class="call-grid-tools"><span id="roomPing" data-i18n-title="guest.roomPingTitle" title="Ping de señalización entre tu equipo y la sala" data-i18n="guest.roomLabel">Sala —</span><div class="row"><button id="networkToggle" class="small" aria-pressed="true" data-i18n="guest.latencies">Latencias</button><button id="reorderGrid" class="small" aria-pressed="false" data-i18n="guest.reorder">Reordenar</button><button id="restoreGrid" class="small hidden" data-i18n="guest.viewAll">Ver todos</button><button id="floatingVideo" class="small hidden" data-i18n="guest.pip">Ventana flotante</button><button id="enableAudio" class="small primary hidden" data-i18n="guest.enableAudio">Activar audio de la sala</button><button id="landscapeBtn" class="small" aria-pressed="false" data-i18n-title="guest.landscapeTitle" title="Fija la pantalla en horizontal en el móvil (al entrar en pantalla completa)" data-i18n="guest.landscape">Horizontal</button><button id="callFullscreen" class="small" aria-pressed="false" data-i18n="guest.fullscreen">Pantalla completa</button></div></div>
   <button id="exitFullscreen" class="immersive-exit small hidden" data-i18n="guest.exitFullscreen">Salir de pantalla completa</button>
   <div id="screenShareStatus" class="screen-share-status hidden" role="status" aria-live="polite"><span id="screenShareText" class="grow"></span><button id="startScreen" class="small primary hidden" data-i18n="guest.shareScreen">Compartir pantalla</button><button id="cancelScreen" class="small" data-i18n="guest.cancel">Cancelar</button></div>
   <div class="grid" id="grid"></div>
   <div class="bar">
     <button class="icon on" id="micBtn" data-icon="mic" data-i18n-title="guest.micTitle" title="Micrófono (M)" data-i18n-aria="guest.mic" aria-label="Micrófono"></button>
+    <button class="icon" id="deafenBtn" data-icon="headphones" aria-pressed="false" data-i18n-title="guest.selfDeafenTitle" title="Deja de escuchar la sala solo para ti; tu micrófono sigue funcionando" data-i18n-aria="guest.selfDeafen" aria-label="No escuchar la sala"></button>
     <button class="icon on" id="camBtn" data-icon="cam" data-i18n-title="guest.camTitle" title="Cámara (V)" data-i18n-aria="guest.camera" aria-label="Cámara"></button>
     <button class="icon" id="screenBtn" data-icon="screen" data-i18n-title="guest.shareScreen" title="Compartir pantalla" data-i18n-aria="guest.shareScreen" aria-label="Compartir pantalla"></button>
     <button class="icon" id="cam2Btn" data-icon="plus" data-i18n-title="guest.addCamera" title="Agregar otra cámara" data-i18n-aria="guest.addCamera" aria-label="Agregar otra cámara"></button>
@@ -52,8 +56,10 @@
     <button class="danger" id="leaveBtn" data-icon="leave" data-i18n="guest.leave">Salir</button>
   </div>
   <div class="card drawer hidden" id="chat">
+    <div class="row wrap" id="chatConvos" role="group" aria-label="Conversaciones" data-i18n-aria="misc.chatConvosAria" style="margin-bottom:6px"></div>
     <div class="chatlog" id="chatlog"></div>
     <div class="row"><input id="chatInput" maxlength="500" data-i18n-placeholder="guest.messagePlaceholder" placeholder="Mensaje…"><button id="chatSend" class="primary" data-i18n="guest.send">Enviar</button></div>
+    <p id="chatOffNote" class="muted hidden" data-i18n="misc.chatDmOffNote">El anfitrión desactivó los mensajes directos.</p>
   </div>
   <div class="card hidden" id="reactions" style="position:fixed;bottom:80px;left:50%;transform:translateX(-50%);display:flex;gap:6px;padding:8px"></div>
 </section>

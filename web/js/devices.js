@@ -41,7 +41,7 @@ const off = (...names) => names.some((n) => params.has(n) && ["0", "false", "off
 export function loadPrefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch {}
-  p = { camera: "", mic: "", speaker: "", quality: "720", fps: "30", echo: true, denoise: true, autogain: true, stereo: false, mirror: true, gain: 100, codec: "", effect: "none", effectPreset: "", effectStrength: 50, flipH: false, flipV: false, ...p };
+  p = { camera: "", mic: "", speaker: "", quality: "720", fps: "30", echo: true, denoise: true, autogain: true, stereo: false, mirror: true, gain: 100, codec: "", effect: "none", effectPreset: "", effectStrength: 50, effectFit: "", flipH: false, flipV: false, ...p };
   const g = (n) => params.get(n);
   // &quality=0/1/2 (VDO) or a height
   if (params.has("quality")) p.quality = ({ 0: "1080", 1: "720", 2: "360" })[g("quality")] || g("quality");
@@ -72,6 +72,8 @@ export function loadPrefs() {
     if (Number.isFinite(value)) p.effectStrength = Math.min(100, Math.max(0, value));
   }
   if (g("bgpreset")) { p.effect = "bg"; p.effectPreset = g("bgpreset"); }
+  // &effectfit=contain|cover: how image/video assets fill the frame.
+  if (g("effectfit") === "contain" || g("effectfit") === "cover") p.effectFit = g("effectfit");
   if (g("gain")) p.gain = Math.max(0, Math.min(400, Number(g("gain")) || 100));
   return p;
 }

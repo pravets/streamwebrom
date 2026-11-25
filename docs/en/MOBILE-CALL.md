@@ -31,3 +31,9 @@ The host receives the screen as an independent source and chooses when to add it
 Press **Reorder** and use the arrows on each tile. The order is local and is preserved when rotating the device; it does not alter the host's stage. "Finish ordering" hides the arrows. All tiles keep 16:9. In landscape, when enlarging a video, the thumbnails move to the side if that yields a larger image.
 
 **Full screen** uses the whole window and requests native fullscreen when available. Controls appear when tapping or moving the pointer and hide when unused. You can always exit from the top button or Escape. A screen with a different aspect ratio may leave space around the group to preserve 16:9 without distorting the videos.
+
+## Room sound and landscape mode
+
+The headphones button next to the microphone lets you **stop hearing the room** without muting your microphone: participants keep hearing you while you hear nothing from the room. The same choice is available before entering ("Mute the room for me") and as `&deaf` / `&deafen` in the link (`&deaf=0` forces it off). It is remembered between visits. It is independent of the host's deafen: if the host restores your sound but you had muted the room yourself, your choice stays until you turn it off. Only what you hear is muted; your outgoing audio and video are never touched.
+
+**Landscape** (toolbar above the grid, the "Landscape screen on my phone" checkbox before entering, or `&landscape=1` in the link) keeps the phone screen horizontal. On Android Chrome the orientation locks while you are in fullscreen and is released when you leave it; the choice is remembered between visits. Browsers without the lock API, such as iOS Safari, show a gentle "rotate your phone" hint while you hold the phone vertically, and hide it in landscape. The page is never CSS-rotated, so fixed controls and the outgoing video keep their normal orientation.

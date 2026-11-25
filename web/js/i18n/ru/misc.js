@@ -31,6 +31,11 @@ export const ru = {
   "misc.chatEmojis": "Эмодзи",
   "misc.chatStickers": "Стикеры",
   "misc.chatHostBadge": "Ведущий",
+  "misc.chatGeneral": "Общий",
+  "misc.chatConvosAria": "Диалоги",
+  "misc.chatDmTo": "Личное сообщение",
+  "misc.chatDeleteTitle": "Удалить сообщение",
+  "misc.chatDmOffNote": "Ведущий отключил личные сообщения.",
 
   "misc.relayLocalActive": "Локальный релей активен",
   "misc.relayLocalActiveText": "Эта комната использует локальный релей. Ведущий может включить Cloudflare для комнат с паролем в разделе «Соединение и экономия».",

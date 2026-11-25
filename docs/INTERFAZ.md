@@ -10,6 +10,8 @@ Vista también agrupa Solo escenario, pantalla completa y visualización de late
 
 La portada separa Salas guardadas de Estudios recientes. La configuración no usa una biblioteca gráfica ni fuentes remotas: variables CSS para colores, preferencias locales y un ResizeObserver para ajustar el escenario. No se crean pistas, workers de video ni temporizadores por cambiar el tema o plegar paneles.
 
+**Chat** tiene una conversación General para toda la sala y una conversación directa por participante, con contadores de no leídos en el selector de conversaciones. El botón ✉ de Gente (estudio) o del mosaico de un participante (invitado) abre la conversación directa. El anfitrión puede eliminar cualquier mensaje (🗑) y elige quién envía mensajes directos en Marca → Mensajes directos: Todos, Solo al anfitrión (los invitados solo escriben al anfitrión) o Desactivados. Con Desactivados, el chat general sigue funcionando y el compositor directo se sustituye por una nota. La historia vive en la memoria de la sala: se restaura al reconectar (los invitados conservan sus conversaciones mediante el pase de reingreso; un anfitrión que reconecta recibe un nuevo identificador y su historia directa empieza vacía), y se pierde al cerrar la sala o reiniciar el servidor.
+
 Referencias de producto revisadas:
 
 - [StreamYard: apariencia clara, oscura y automática](https://support.streamyard.com/hc/en-us/articles/31567252131732-Does-StreamYard-have-a-Dark-Mode).

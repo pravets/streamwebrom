@@ -15,11 +15,19 @@ export function immersive(root, button, exit, opts = {}) {
   }
   const leave = () => {
     apply(false);
+    opts.onExitFullscreen?.();
     if (document.fullscreenElement === root) document.exitFullscreen?.().catch(() => {});
   };
-  const enter = (native = opts.native !== false) => {
+  const enter = async (native = opts.native !== false) => {
     apply(true); button.blur();
-    if (native) try { root.requestFullscreen?.().catch(() => {}); } catch { /* cinema still fills the browser */ }
+    if (native) try {
+      if (root.requestFullscreen) {
+        await root.requestFullscreen();
+        // The orientation lock (guest landscape mode) is only legal inside
+        // fullscreen, so it runs after the request actually succeeded.
+        opts.onFullscreen?.();
+      }
+    } catch { /* cinema still fills the browser */ }
   };
   const toggle = () => { if (active) leave(); else enter(); };
   const changed = () => { if (!document.fullscreenElement) leave(); };

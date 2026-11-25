@@ -16,6 +16,19 @@ export function accentApplies(layout, stage, featured) {
   return !!featured && ACCENT_LAYOUTS.includes(layout) && (stage || []).includes(featured);
 }
 
+/** One-click backstage accent: returns a new scene state. Adds `id` to the
+ * stage when missing, features it, and switches to "spotlight" if the layout
+ * has no accent slot. Clicking the already-featured source clears the accent
+ * (featured="") without touching the stage. Pure: the input is not mutated. */
+export function quickAccent(scene, id) {
+  if ((scene.featured || "") === id) return { ...scene, featured: "" };
+  const next = { ...scene, featured: id };
+  const stage = scene.stage || [];
+  if (!stage.includes(id)) next.stage = [...stage, id];
+  if (!ACCENT_LAYOUTS.includes(next.layout)) next.layout = "spotlight";
+  return next;
+}
+
 /** Returns rectangles [{x,y,w,h}] for n tiles. */
 export function computeLayout(layout, n, opts = {}) {
   const pad = opts.pad ?? 24, gap = opts.gap ?? 16, bottom = opts.bottom ?? 0;
@@ -199,7 +212,12 @@ export class Compositor {
       ctx.fillStyle = "#111";
       ctx.fillRect(r.x, r.y, r.w, r.h);
       const hidden = (st.hidden && st.hidden[id]) || s.camOff;
-      const ok = !hidden && (s.kind === "screen" ? drawContain(ctx, s.video, r) : drawCover(ctx, s.video, r, !!s.mirror));
+      // Screens and media letterbox by default; a media source can opt into
+      // cover (crop) through the shared room state (state.fit[id] === "cover").
+      const mediaCover = s.kind === "media" && st.fit?.[id] === "cover";
+      const ok = !hidden && (s.kind === "screen" || (s.kind === "media" && !mediaCover)
+        ? drawContain(ctx, s.video, r)
+        : drawCover(ctx, s.video, r, s.kind === "media" ? false : !!s.mirror));
       if (!ok) {
         ctx.fillStyle = "#1c1c2a"; ctx.fillRect(r.x, r.y, r.w, r.h);
         ctx.fillStyle = accent; ctx.beginPath();

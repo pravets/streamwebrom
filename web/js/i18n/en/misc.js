@@ -31,6 +31,11 @@ export const en = {
   "misc.chatEmojis": "Emoji",
   "misc.chatStickers": "Stickers",
   "misc.chatHostBadge": "Host",
+  "misc.chatGeneral": "General",
+  "misc.chatConvosAria": "Conversations",
+  "misc.chatDmTo": "Direct message",
+  "misc.chatDeleteTitle": "Delete message",
+  "misc.chatDmOffNote": "The host turned off direct messages.",
 
   "misc.relayLocalActive": "Local relay active",
   "misc.relayLocalActiveText": "This room uses the local relay. The host can enable Cloudflare for password-protected rooms from Connection & savings.",

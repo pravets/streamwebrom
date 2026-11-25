@@ -12,6 +12,8 @@ View also groups Stage only, full screen and latency display. The program keeps 
 
 The landing page separates Saved rooms from Recent studios. The configuration uses no graphics library and no remote fonts: CSS variables for colours, local preferences and a ResizeObserver to fit the stage. No tracks, video workers or timers are created by changing the theme or collapsing panels.
 
+**Chat** has a General conversation for the whole room plus one direct conversation per participant, with unread badges on the conversation switcher. The ✉ button in People (studio) or on a participant's tile (guest) opens the direct conversation. The host can delete any message (🗑) and chooses who may send direct messages in Brand → Direct messages: Everyone, Host only (guests may only write to a host) or Off. With Off the general chat keeps working and the direct composer is replaced by a note. History lives in the room's memory: it is restored on reconnect (guests keep their conversations through the rejoin pass; a reconnecting host gets a new peer id, so their direct history starts empty), and it is lost when the room closes or the server restarts.
+
 Product references reviewed:
 
 - [StreamYard: light, dark and automatic appearance](https://support.streamyard.com/hc/en-us/articles/31567252131732-Does-StreamYard-have-a-Dark-Mode).

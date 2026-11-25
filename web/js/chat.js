@@ -1,6 +1,7 @@
 // Shared chat for the studio and the guest page: messages with time, host
 // badge, links and @mentions, big emoji-only messages, an emoji picker (with
-// recents) and stickers.
+// recents) and stickers. Also the conversation layer: the room-wide "General"
+// chat plus one direct conversation per peer, with unread badges.
 import { el } from "./rtc.js";
 import { t } from "./i18n.js";
 import { STICKERS, stickerById } from "./stickers.js";
@@ -139,4 +140,150 @@ export function mountComposer(row, input, send) {
     close();
   };
   return { send: doSend, close };
+}
+
+// ---------- conversations: general chat + direct messages ----------
+
+/** Conversation key of the room-wide chat. */
+export const GENERAL = "general";
+
+/** Sorted pair of peer ids: both sides of a dm share one key (server parity). */
+export function conversationKey(a, b) {
+  return a < b ? a + "|" + b : b + "|" + a;
+}
+
+/** The other participant of a dm envelope; works for the sender's echo too. */
+export function dmPeer(m, myId) {
+  return m.peerId === myId ? m.to : m.peerId;
+}
+
+/**
+ * Unread reducer. state maps conversation key -> count; m is a "chat" or "dm"
+ * signalling envelope. A message counts for its conversation unless that
+ * conversation is open or the message is my own echo. Pure: returns a new
+ * object and never mutates the input.
+ */
+export function unreadAfter(state, m, openKey, myId) {
+  const key = m.type === "dm" ? conversationKey(m.peerId, m.to) : GENERAL;
+  if (key === openKey) return state;
+  if (myId && m.comment && m.comment.peerId === myId) return state;
+  return { ...state, [key]: (state[key] || 0) + 1 };
+}
+
+/**
+ * Wire a chat pane (log + composer + conversation switcher). Shared by the
+ * studio tab and the guest drawer. opts:
+ *   log, switcher, input, sendButton  DOM nodes
+ *   send(msg)          signalling send
+ *   myId(), myName()   getters (the peer id changes on reconnect)
+ *   peers()            [{id,name,role}] currently in the room
+ *   canDM(peer)        page policy: may I write to this peer?
+ *   policy()           "all" | "host-only" | "off" ("" means all)
+ *   actionsFor(c,key)  optional per-message buttons (show on screen, delete)
+ *   onUnread(total)    badge callback (tab or drawer button)
+ *   onMention(c)       optional mention notification
+ *   offNote            optional node shown while dms are off
+ */
+export function createChat(opts) {
+  const { log, switcher, input, sendButton, send, myId, myName, peers, canDM, policy, actionsFor, onUnread, onMention, offNote } = opts;
+  const histories = new Map(); // key -> [comment]
+  let openKey = GENERAL;
+  let unread = {};
+  const total = () => Object.values(unread).reduce((a, b) => a + b, 0);
+  const keyOf = (m) => (m.type === "dm" ? conversationKey(m.peerId, m.to) : GENERAL);
+  const peerOf = (key) => key.split("|").find((id) => id !== myId()) || "";
+  const nameOf = (id) => {
+    const p = peers().find((x) => x.id === id);
+    if (p) return p.name;
+    for (const list of histories.values()) for (const c of list) if (c.peerId === id) return c.from;
+    return id;
+  };
+  const node = (c, key) => {
+    const n = chatMessage(c, { myId: myId(), myName: myName(), actions: actionsFor ? actionsFor(c, key) : [] });
+    n.dataset.cid = c.id;
+    return n;
+  };
+  const composerRow = input.parentElement;
+  const composer = mountComposer(composerRow, input, (x) => {
+    if (openKey === GENERAL) {
+      send(x.sticker ? { type: "chat", kind: "sticker", text: x.sticker } : { type: "chat", text: x.text });
+    } else {
+      const to = peerOf(openKey);
+      if (to) send(x.sticker ? { type: "dm", to, kind: "sticker", text: x.sticker } : { type: "dm", to, text: x.text });
+    }
+  });
+  sendButton.onclick = composer.send;
+  input.addEventListener("keydown", (e) => e.key === "Enter" && !e.isComposing && composer.send());
+
+  function renderSwitcher() {
+    const me = myId();
+    const keys = new Set();
+    for (const p of peers()) if (p.id !== me && canDM(p)) keys.add(conversationKey(me, p.id));
+    for (const key of histories.keys()) if (key !== GENERAL) keys.add(key); // keep history of peers who left
+    const btn = (key, label) => {
+      const n = unread[key] || 0;
+      return el("button", { type: "button", class: "small" + (key === openKey ? " on" : ""), onclick: () => open(key) },
+        label, n ? el("span", { class: "badge", text: n > 99 ? "99+" : String(n) }) : null);
+    };
+    const dmKeys = [...keys].sort((a, b) => nameOf(peerOf(a)).localeCompare(nameOf(peerOf(b))));
+    switcher.replaceChildren(btn(GENERAL, t("misc.chatGeneral")), ...dmKeys.map((key) => btn(key, nameOf(peerOf(key)))));
+  }
+  function renderLog() {
+    log.replaceChildren(...(histories.get(openKey) || []).map((c) => node(c, openKey)));
+    log.scrollTop = log.scrollHeight;
+  }
+  function syncComposer() {
+    // "off" disables direct messages only: the general chat keeps working.
+    const off = policy() === "off" && openKey !== GENERAL;
+    composerRow.classList.toggle("hidden", off);
+    if (offNote) offNote.classList.toggle("hidden", !off);
+  }
+  function refresh() {
+    // A policy change can forbid the open conversation: fall back to general.
+    if (openKey !== GENERAL) {
+      const other = peers().find((p) => p.id === peerOf(openKey));
+      if (policy() === "off" || (other && !canDM(other))) { openKey = GENERAL; renderLog(); }
+    }
+    renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
+  }
+  function open(key) {
+    openKey = key;
+    delete unread[key];
+    renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
+  }
+  function receive(m) {
+    const c = m.comment;
+    if (!c) return;
+    const key = keyOf(m);
+    const list = histories.get(key) || [];
+    list.push(c);
+    if (list.length > 300) list.splice(0, list.length - 300);
+    histories.set(key, list);
+    const n = node(c, key);
+    if (key === openKey) appendChat(log, n);
+    unread = unreadAfter(unread, m, openKey, myId());
+    renderSwitcher(); if (onUnread) onUnread(total());
+    if (n.dataset.mention && c.peerId !== myId() && onMention) onMention(c);
+  }
+  function remove(id) {
+    for (const list of histories.values()) {
+      const i = list.findIndex((c) => c.id === id);
+      if (i >= 0) list.splice(i, 1);
+    }
+    log.querySelector(`[data-cid="${CSS.escape(id)}"]`)?.remove();
+  }
+  // welcome/reconnect: the server history is authoritative and replaces ours.
+  function seed(chat, dms) {
+    histories.clear(); unread = {}; openKey = GENERAL;
+    histories.set(GENERAL, (chat || []).slice(-300));
+    for (const c of dms || []) {
+      const key = conversationKey(c.peerId, c.to);
+      const list = histories.get(key) || [];
+      list.push(c);
+      histories.set(key, list);
+    }
+    renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(0);
+  }
+  renderSwitcher(); syncComposer();
+  return { seed, receive, remove, open, refresh, focus: () => open(openKey), openDM: (peerId) => open(conversationKey(myId(), peerId)), unreadTotal: total };
 }

@@ -9,15 +9,18 @@
 //   &quality=0|1|2 or &height=, &fps=, &stereo, &denoise=0, &echo=0, &autogain=0
 //   &videodevice= &audiodevice= &outputdevice=  index (1..n), part of the name, or 0 = off
 //   &novideo / &noaudio     audio-only / video-only
+//   &deaf / &deafen         join without hearing the room (mic keeps working)
+//   &landscape=1            lock the phone screen to landscape in fullscreen
 import { $, el, toast, params, api, Signal, publish, subscribe, levelMeter, staleRevision } from "./rtc.js";
 import { listDevices, loadPrefs, savePrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain } from "./devices.js";
 import { remoteSnapshot, remoteStats, CAMCTL } from "./remote.js";
-import { chatMessage, appendChat, mountComposer } from "./chat.js";
+import { createChat } from "./chat.js";
 import { automaticRoute } from "./network.js";
 import { callGrid } from "./call-grid.js";
 import { roomTelemetry, metricText } from "./telemetry.js";
 import { immersive } from "./immersive.js";
-import { RoomAudio, pictureInPicture } from "./room-audio.js";
+import { RoomAudio, pictureInPicture, effectiveDeafen } from "./room-audio.js";
+import { lockLandscape, unlockLandscape, installOrientationHint } from "./orientation.js";
 import { screenAudioNotice, resumeCaptureAudio, stopScreenCapture } from "./devices.js";
 import { chooseScreen } from "./screen-share.js";
 import { installI18n, t, onLangChange } from "./i18n.js";
@@ -34,11 +37,26 @@ const extraCams = new Map(); // pubId -> { pub, media }
 let state = {};
 const remotes = new Map(); // streamId -> { tile, sub, video }
 const remoteInfo = new Map(), remoteRetries = new Map();
+const peers = new Map(); // peerId -> {id,name,role}: chat conversations and dm targets
 const roomAudio = new RoomAudio(blocked => $("#enableAudio")?.classList.toggle("hidden", !blocked));
 $("#enableAudio").onclick = () => roomAudio.resume();
 const closePiP = pictureInPicture($("#floatingVideo"), () => $("#grid .tile.expanded video") || $('#grid .tile:not([data-id="me"]) video') || $('#grid [data-id="me"] video'), text => toast(text));
 const sig = new Signal();
-const cinema = immersive($("#call"), $("#callFullscreen"), $("#exitFullscreen"));
+// Local copies of the devices.js URL flag pattern (that file stays untouched):
+// &name / &name=1 / &name=true / &name=on enable; &name=0|false|off disables.
+const truthy = (v) => v === "" || v === "1" || v === "true" || v === "on";
+const flag = (...names) => names.some((n) => params.has(n) && truthy(params.get(n)));
+const off = (...names) => names.some((n) => params.has(n) && ["0", "false", "off"].includes(params.get(n)));
+const storedFlag = (key) => { try { return localStorage.getItem(key) === "1"; } catch { return false; } };
+const saveFlag = (key, on) => { try { localStorage.setItem(key, on ? "1" : "0"); } catch {} };
+// Forced landscape (ticket #14): the URL wins over the saved swr.landscape choice.
+let landscapeMode = flag("landscape") ? true : off("landscape") ? false : storedFlag("swr.landscape");
+const orientationHint = installOrientationHint($("#orientationHint"));
+const cinema = immersive($("#call"), $("#callFullscreen"), $("#exitFullscreen"), {
+  // Android Chrome only allows the orientation lock inside fullscreen.
+  onFullscreen: () => { if (landscapeMode) lockLandscape(); },
+  onExitFullscreen: () => unlockLandscape(),
+});
 const telemetry = roomTelemetry(sig, () => pub?.pc, $("#roomPing"), peers => {
   for (const tile of document.querySelectorAll("#grid .tile")) {
     const label = tile.querySelector(".tile-latency");
@@ -88,7 +106,10 @@ api(`/api/rooms/${encodeURIComponent(room)}`).then((r) => {
 
 let remoteKbps = 0; // set by the host (director) from the studio
 const videoKbps = () => remoteKbps || Number(params.get("bitrate") || params.get("vb")) || kbpsFor(Number(prefs.quality));
-const pubOpts = (name) => ({ kind: "camera", name, videoKbps: videoKbps(), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 96 });
+// URL quality/bitrate/fps params are explicit operator intent: they override
+// the room bandwidth mode caps (balanced/eco), like the director panel does.
+const explicitTuning = ["bitrate", "vb", "quality", "height", "h", "fps", "framerate", "fr"].some((n) => params.has(n));
+const pubOpts = (name) => ({ kind: "camera", name, videoKbps: videoKbps(), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 96, explicit: explicitTuning });
 
 let meterTimer, noDeviceNotice = false;
 function showMeter(stream) {
@@ -273,7 +294,9 @@ async function resume(m) {
       if (x.tile) { x.tile.dataset.id = fresh.id; x.tile.dataset.peer = myId; }
     } catch (e) { if (!sig.closed && sig.ws === socket) toast(t("guest.extraCamFailed", { error: e.message }),"err"); }
   }
-  $("#chatlog").replaceChildren(); for (const c of m.chat || []) addChat(c); // catch up on what we missed
+  peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
+  chatPanel.seed(m.chat || [], m.dms || []); // catch up on what we missed
+  refreshDmButtons();
   sendMedia();
 }
 
@@ -290,8 +313,13 @@ async function enter(m) {
   await connectMedia();
   if (sig.closed) return;
   setMic(micOn()); setCam(camOn());
+  // Apply the prejoin choices (URL flag > saved preference > checkbox) on entry.
+  setSelfDeafened($("#deafenPre").checked);
+  setLandscapeMode($("#landscapePre").checked);
+  peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
   for (const s of m.streams || []) watch(s.id, s.kind, s.owner, "", s.revision);
-  for (const c of m.chat || []) addChat(c);
+  chatPanel.seed(m.chat || [], m.dms || []);
+  refreshDmButtons();
   updateStageBadge();
   if (params.has("screenshare") || params.has("ss")) $("#screenBtn").click();
 }
@@ -300,9 +328,14 @@ async function enter(m) {
 sig.on("stream-added", (m) => watch(m.info.id, m.info.kind, m.info.owner, m.name, m.info.revision));
 sig.on("stream-updated", (m) => { if (staleRevision(m.info.revision, remoteInfo.get(m.info.id)?.revision)) return; unwatch(m.info.id); watch(m.info.id, m.info.kind, m.info.owner, m.name, m.info.revision); });
 sig.on("stream-removed", (m) => { const current = remoteInfo.get(m.stream); if (m.revision && current?.revision && m.revision !== current.revision) return; unwatch(m.stream); });
-sig.on("state", (m) => { state = m.state; updateStageBadge(); });
+sig.on("state", (m) => { state = m.state; updateStageBadge(); chatPanel.refresh(); refreshDmButtons(); });
 sig.on("screen-permission", screenPermission);
-sig.on("chat", (m) => addChat(m.comment));
+sig.on("chat", (m) => chatPanel.receive(m));
+sig.on("dm", (m) => chatPanel.receive(m));
+sig.on("chat-deleted", (m) => chatPanel.remove(m.id));
+sig.on("peer-joined", (m) => { peers.set(m.peer.id, m.peer); chatPanel.refresh(); refreshDmButtons(); });
+sig.on("peer-updated", (m) => { peers.set(m.peer.id, m.peer); chatPanel.refresh(); refreshDmButtons(); });
+sig.on("peer-left", (m) => { peers.delete(m.peerId); chatPanel.refresh(); refreshDmButtons(); });
 sig.on("reaction", (m) => fly(m.text));
 sig.on("request", (m) => {
   switch (m.action) {
@@ -324,6 +357,9 @@ sig.on("request", (m) => {
 // camera or mic ON still needs the guest's click (see ask()).
 const report = (action, value) => sig.send({ type: "report", action, value });
 let deafened = false;
+// The guest's own "don't hear the room" choice (ticket #12), independent of the
+// host's deafen: URL &deaf/&deafen wins over the saved swr.selfdeaf preference.
+let selfDeafened = flag("deaf", "deafen") ? true : off("deaf", "deafen") ? false : storedFlag("swr.selfdeaf");
 async function remoteControl(action, v) {
   const camTrack = () => { const t = media.getVideoTracks()[0]; return t?.raw || t; };
   switch (action) {
@@ -387,8 +423,9 @@ async function remoteControl(action, v) {
     }
     case "deafen": case "undeafen":
       deafened = action === "deafen";
-      for (const id of remotes.keys()) { const audio = roomAudio.get(id); if (audio) audio.muted = deafened; }
-      return toast(deafened ? t("guest.deafenedNote") : t("guest.undeafenedNote"));
+      applyRoomMute();
+      // The host's undeafen never overrides the guest's own self-deafen choice.
+      return toast(deafened ? t("guest.deafenedNote") : selfDeafened ? t("guest.selfDeafenedNote") : t("guest.undeafenedNote"));
     case "message":
       return showHostMessage(String(v || "").slice(0, 500));
     case "reload": {
@@ -462,13 +499,14 @@ function addTile(id, stream, name, mine, level, kind = "camera", owner = "") {
   v.muted = true; v.srcObject = stream;
   if (mine) mirrorPreview(v); else applySink(v, prefs.speaker);
   v.play().catch(() => {});
-  const audio = mine ? null : roomAudio.add(id, stream); if (audio) audio.muted = deafened;
+  const audio = mine ? null : roomAudio.add(id, stream); if (audio) audio.muted = effectiveDeafen(deafened, selfDeafened);
   if (audio) applySink(audio, prefs.speaker);
   const vol = mine ? null : el("input", { type: "range", min: 0, max: 1, step: 0.05, value: 1, title: t("guest.volumeTitle"), class: "tilevol", oninput: (e) => { if (audio) audio.volume = Number(e.target.value); } });
+  const dmBtn = mine || !owner ? null : el("button", { class: "small tile-dm" + (canDM(peers.get(owner)) ? "" : " hidden"), type: "button", style: "position:absolute;top:6px;left:6px;z-index:2", title: t("misc.chatDmTo"), "aria-label": t("misc.chatDmTo"), text: "✉", onclick: () => openGuestDM(owner) });
   const tile = el("div", { class: "tile", "data-id": id, "data-name": name, "data-kind": kind, "data-peer": mine ? myId : owner }, v,
     el("span", { class: "tile-latency", title: t("guest.rttTitle"), text: t("guest.rttValue") }),
     el("button", { class: "tile-focus", type: "button", "aria-label": t("guest.focusAria", { name }), "aria-pressed": "false" }),
-    el("span", { class: "name", text: name }), vol);
+    el("span", { class: "name", text: name }), vol, dmBtn);
   $("#grid").append(tile); updateHiddenCameras(); telemetry.refresh();
   const speakingTimer = setInterval(() => { if (!tile.isConnected) return clearInterval(speakingTimer); tile.classList.toggle("speaking", level() > 0.15); }, 150);
   return tile;
@@ -510,10 +548,50 @@ const micOn = () => !!media?.getAudioTracks().some((t) => t.enabled);
 const camOn = () => !!media?.getVideoTracks().some((t) => t.enabled);
 function sendMedia() { if (pub) sig.send({ type: "media", mic: micOn(), cam: camOn() }); }
 
+// ---------- guest-side toggles: self-deafen and forced landscape ----------
+// Room playback mute = host deafen OR the guest's own choice. Only roomAudio
+// elements are muted here; outgoing tracks/media are never touched.
+function applyRoomMute() {
+  const muted = effectiveDeafen(deafened, selfDeafened);
+  for (const id of remotes.keys()) { const audio = roomAudio.get(id); if (audio) audio.muted = muted; }
+}
+function renderDeafenBtn() {
+  const b = $("#deafenBtn");
+  if (!b) return;
+  b.classList.toggle("off", selfDeafened);
+  b.setAttribute("aria-pressed", String(selfDeafened));
+}
+function setSelfDeafened(on, announce = false) {
+  selfDeafened = !!on;
+  saveFlag("swr.selfdeaf", selfDeafened);
+  const pre = $("#deafenPre"); if (pre) pre.checked = selfDeafened;
+  renderDeafenBtn();
+  applyRoomMute();
+  if (announce) toast(t(selfDeafened ? "guest.selfDeafenedNote" : "guest.selfUndeafenedNote"), selfDeafened ? "" : "ok");
+}
+function setLandscapeMode(on, announce = false) {
+  landscapeMode = !!on;
+  saveFlag("swr.landscape", landscapeMode);
+  const pre = $("#landscapePre"); if (pre) pre.checked = landscapeMode;
+  const btn = $("#landscapeBtn");
+  if (btn) btn.setAttribute("aria-pressed", String(landscapeMode));
+  orientationHint.setEnabled(landscapeMode);
+  if (landscapeMode) { if (document.fullscreenElement === $("#call")) lockLandscape(); }
+  else unlockLandscape();
+  if (announce) toast(t(landscapeMode ? "guest.landscapeOn" : "guest.landscapeOff"));
+}
+$("#deafenBtn").onclick = () => setSelfDeafened(!selfDeafened, true);
+$("#deafenPre").onchange = (e) => setSelfDeafened(e.target.checked);
+$("#landscapeBtn").onclick = () => setLandscapeMode(!landscapeMode, true);
+$("#landscapePre").onchange = (e) => setLandscapeMode(e.target.checked);
+// Sync the controls with the resolved preferences (URL > localStorage) at start.
+setSelfDeafened(selfDeafened);
+setLandscapeMode(landscapeMode);
+
 $("#micBtn").onclick = () => setMic(!micOn());
 $("#camBtn").onclick = () => setCam(!camOn());
 $("#handBtn").onclick = () => { sig.send({ type: "hand" }); $("#handBtn").classList.toggle("on"); };
-$("#chatBtn").onclick = () => { $("#chat").classList.toggle("hidden"); $("#chatBtn").classList.remove("on"); };
+$("#chatBtn").onclick = () => { if (!$("#chat").classList.toggle("hidden")) chatPanel.focus(); };
 $("#reactBtn").onclick = () => $("#reactions").classList.toggle("hidden");
 for (const e of ["👏", "❤️", "😂", "🔥", "🎉", "👍"]) $("#reactions").append(el("button", { class: "small", onclick: () => sig.send({ type: "reaction", text: e }), text: e }));
 
@@ -631,7 +709,7 @@ function leave(text) {
   // Closing signalling first avoids queued unpublish operations delaying the
   // server's leave cleanup when a TURN connection takes time to shut down.
   sig.close(); pub?.stop(); screenPub?.stop(); for (const x of extraCams.values()) x.pub.stop();
-  clearInterval(meterTimer); gridLayout.destroy(); telemetry.destroy(); cinema.destroy(); closePiP();
+  clearInterval(meterTimer); gridLayout.destroy(); telemetry.destroy(); cinema.destroy(); orientationHint.destroy(); closePiP();
   for (const id of [...remoteInfo.keys()]) unwatch(id);
   roomAudio.close();
   stopScreenCapture(screenMedia);
@@ -656,17 +734,36 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keyup", (e) => { if (e.code === "Space" && ptt) { ptt = false; setMic(false); } });
 
 // ---------- chat ----------
-function addChat(c) {
-  const msg = chatMessage(c, { myId, myName: $("#name").value.trim() });
-  appendChat($("#chatlog"), msg);
-  if ($("#chat").classList.contains("hidden") && c.peerId !== myId) {
-    $("#chatBtn").classList.add("on");
-    if (msg.dataset.mention) toast(t("guest.mentioned", { name: c.from }));
+// General room chat plus direct conversations. Policy: "all" lets guests
+// write to anyone, "host-only" only to a host, "off" disables dms entirely.
+function canDM(p) {
+  if (!p || p.id === myId) return false;
+  const pol = state.dmPolicy || "all";
+  if (pol === "off") return false;
+  if (pol === "host-only") return p.role === "host";
+  return p.role === "host" || p.role === "guest";
+}
+const chatPanel = createChat({
+  log: $("#chatlog"), switcher: $("#chatConvos"), input: $("#chatInput"), sendButton: $("#chatSend"),
+  offNote: $("#chatOffNote"),
+  send: (m) => sig.send(m),
+  myId: () => myId, myName: () => $("#name").value.trim(),
+  peers: () => [...peers.values()],
+  canDM,
+  policy: () => state.dmPolicy || "all",
+  onUnread: (n) => $("#chatBtn").classList.toggle("on", n > 0),
+  onMention: (c) => { if ($("#chat").classList.contains("hidden")) toast(t("guest.mentioned", { name: c.from })); },
+});
+function openGuestDM(peerId) {
+  $("#chat").classList.remove("hidden");
+  chatPanel.openDM(peerId);
+}
+function refreshDmButtons() {
+  for (const tile of document.querySelectorAll("#grid .tile")) {
+    const b = tile.querySelector(".tile-dm");
+    if (b) b.classList.toggle("hidden", !canDM(peers.get(tile.dataset.peer)));
   }
 }
-const composer = mountComposer($("#chatInput").parentElement, $("#chatInput"), (x) => sig.send(x.sticker ? { type: "chat", kind: "sticker", text: x.sticker } : { type: "chat", text: x.text }));
-$("#chatSend").onclick = composer.send;
-$("#chatInput").addEventListener("keydown", (e) => e.key === "Enter" && !e.isComposing && composer.send());
 
 function fly(e) {
   const n = el("div", { class: "reaction-fly", text: e });

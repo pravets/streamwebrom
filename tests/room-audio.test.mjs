@@ -14,7 +14,7 @@ class Audio extends EventTarget {
 const doc=new EventTarget();doc.visibilityState='visible';doc.body={append(){}};doc.createElement=()=>new Audio();
 globalThis.document=doc;globalThis.window=new EventTarget();globalThis.MediaStream=Stream;
 Object.defineProperty(globalThis,'navigator',{value:{audioSession:{type:'auto'}},configurable:true});
-const {RoomAudio}=await import(await moduleURL('room-audio.js'));
+const {RoomAudio,effectiveDeafen}=await import(await moduleURL('room-audio.js'));
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 
 test('late audio tracks start on a separate media element and keep playing when video is hidden',async()=>{
@@ -38,4 +38,22 @@ test('replacing a source detaches old listeners and does not retain old audio',a
  assert.equal(old.srcObject,null);assert.equal(old.paused,true);assert.equal(old.removed,true);
  const calls=old.calls;oldStream.addTrack({kind:'audio'});assert.equal(old.calls,calls);
  fresh.volume=.35;fresh.muted=true;playback.resume();assert.equal(fresh.volume,.35);assert.equal(fresh.muted,true);playback.close();
+});
+test('room mute is host deafen OR self deafen: either flag alone mutes',()=>{
+ assert.equal(effectiveDeafen(false,false),false);
+ assert.equal(effectiveDeafen(true,false),true);
+ assert.equal(effectiveDeafen(false,true),true);
+ assert.equal(effectiveDeafen(true,true),true);
+});
+test('host undeafen keeps the guest self-deafen choice; only room audio elements are muted',async()=>{
+ const playback=new RoomAudio();const stream=new Stream([{kind:'audio',enabled:true}]);
+ const audio=playback.add('guest',stream);await settle();
+ let host=false,self=true;
+ const apply=()=>{audio.muted=effectiveDeafen(host,self)};
+ apply();assert.equal(audio.muted,true);
+ host=true;apply();assert.equal(audio.muted,true);
+ host=false;apply();assert.equal(audio.muted,true); // the guest's own choice survives the host's undeafen
+ self=false;apply();assert.equal(audio.muted,false);
+ assert.equal(stream.tracks[0].enabled,true); // outgoing tracks are never touched
+ playback.close();
 });
