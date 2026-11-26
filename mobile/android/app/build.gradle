@@ -14,23 +14,28 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    // Release signing is opt-in: CI passes -PSWR_STORE_FILE… (or ORG_GRADLE_PROJECT_…)
-    // from repository secrets. Without a key the release stays unsigned and is
-    // published under an explicit "-unsigned" name, never as the installable app.
+    // Release signing is opt-in and all-or-nothing: CI passes the four
+    // properties from repository secrets, a local build may pass none. Reading
+    // a property that is not set would throw MissingPropertyException while
+    // configuring the project, breaking assembleDebug and Gradle sync too.
+    def signingKeys = ['SWR_STORE_FILE', 'SWR_STORE_PASSWORD', 'SWR_KEY_ALIAS', 'SWR_KEY_PASSWORD']
+    def signing = signingKeys.collectEntries { [(it): (project.findProperty(it) ?: '')] }
+    def canSignRelease = signingKeys.every { signing[it] } &&
+        new File(signing['SWR_STORE_FILE'] as String).exists()
     signingConfigs {
         release {
-            if (project.hasProperty('SWR_STORE_FILE') && SWR_STORE_FILE) {
-                storeFile file(SWR_STORE_FILE)
-                storePassword SWR_STORE_PASSWORD
-                keyAlias SWR_KEY_ALIAS
-                keyPassword SWR_KEY_PASSWORD
+            if (canSignRelease) {
+                storeFile file(signing['SWR_STORE_FILE'])
+                storePassword signing['SWR_STORE_PASSWORD']
+                keyAlias signing['SWR_KEY_ALIAS']
+                keyPassword signing['SWR_KEY_PASSWORD']
             }
         }
     }
     buildTypes {
         release {
             minifyEnabled false
-            if (project.hasProperty('SWR_STORE_FILE') && SWR_STORE_FILE) {
+            if (canSignRelease) {
                 signingConfig signingConfigs.release
             }
         }

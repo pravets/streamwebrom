@@ -24,9 +24,9 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 ./scripts/build-android.ps1
 ```
 
-- `dist/StreamWebRom-Android.apk`: release firmada e instalable, producida cuando el repositorio define los secretos de firma (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`).
+- `dist/StreamWebRom-Android.apk`: release firmada e instalable, producida cuando el repositorio define los secretos de firma (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`). Los secretos de GitHub viven en CI y **no llegan** a tu máquina: para firmar en local ejecuta `scripts/build-android.ps1` con `SWR_KEYSTORE` (ruta al .jks), `SWR_KEYSTORE_PASSWORD`, `SWR_KEY_ALIAS` y `SWR_KEY_PASSWORD`; sin ellos el script genera solo debug y unsigned.
 - `dist/StreamWebRom-Android-debug.apk`: instalable para pruebas. La clave de debug permanece fuera del repositorio.
-- `dist/StreamWebRom-Android-unsigned.apk`: **no instalable tal cual** — Android rechaza paquetes sin firma con un error de análisis. Fírmalo antes con tu clave de distribución, p. ej. `apksigner sign --ks your.jks --out StreamWebRom-Android.apk app-release-unsigned.apk`.
+- `dist/StreamWebRom-Android-unsigned.apk`: **no instalable tal cual** — Android rechaza paquetes sin firma con un error de análisis. Fírmalo con tu clave de distribución, p. ej. `apksigner sign --ks tu.jks --out dist/StreamWebRom-Android.apk dist/StreamWebRom-Android-unsigned.apk`.
 
 La app pregunta antes de confiar en un certificado no confiable (p. ej. el modo LAN autofirmado del servidor), por origen de servidor; HTTP simple no se acepta. Minimizar sin Segundo plano recarga la sala al volver — la app muestra un recordatorio.
 

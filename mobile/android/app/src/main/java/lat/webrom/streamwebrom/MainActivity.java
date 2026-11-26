@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.net.http.SslCertificate;
 import android.net.http.SslError;
 import android.os.Bundle;
 import android.os.Build;
@@ -88,6 +89,21 @@ public final class MainActivity extends Activity {
         Uri u = Uri.parse(url == null ? "" : url);
         return u.getScheme() + "://" + u.getHost() + (u.getPort() == -1 ? "" : ":" + u.getPort());
     }
+    // SHA-256 of the certificate the user is being asked about: the trust is
+    // stored per origin *and* pinned to this exact certificate.
+    private static String certPin(SslError error) {
+        try {
+            SslCertificate cert = error.getCertificate();
+            java.security.cert.X509Certificate x = cert == null ? null : cert.getX509Certificate();
+            if (x == null) return "";
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(x.getEncoded());
+            StringBuilder out = new StringBuilder(digest.length * 2);
+            for (byte b : digest) out.append(String.format("%02x", b));
+            return out.toString();
+        } catch (Exception e) {
+            return ""; // no pin: the user is asked every time, never silently trusted
+        }
+    }
     private boolean sameOrigin(Uri u) {
         return trusted != null && valid(u) && trusted.getHost().equalsIgnoreCase(u.getHost()) && port(trusted) == port(u);
     }
@@ -122,16 +138,23 @@ public final class MainActivity extends Activity {
                 return true;
             }
             // Untrusted certificates (e.g. the server's LAN self-signed mode) are
-            // never bypassed silently: the user confirms per origin, and only that
-            // origin is remembered. Everything else keeps the default cancel.
+            // never bypassed silently: the user confirms per origin, and the
+            // trust is pinned to the certificate they confirmed. A different
+            // certificate for the same origin (an attacker in the LAN, or a
+            // regenerated self-signed cert) asks again instead of proceeding.
             @Override public void onReceivedSslError(WebView v, SslErrorHandler handler, SslError error) {
                 String origin = originOf(error.getUrl());
-                if (getPreferences(0).getBoolean("ssl_trust_" + origin, false)) { handler.proceed(); return; }
+                String pin = certPin(error);
+                if (!pin.isEmpty() && pin.equals(getPreferences(0).getString("ssl_trust_" + origin, ""))) {
+                    handler.proceed(); return;
+                }
                 new android.app.AlertDialog.Builder(MainActivity.this)
                     .setTitle(R.string.ssl_title)
-                    .setMessage(getString(R.string.ssl_message, Uri.parse(error.getUrl() == null ? "" : error.getUrl()).getHost()))
+                    .setMessage(getString(R.string.ssl_message, origin))
                     .setPositiveButton(R.string.ssl_continue, (d, w) -> {
-                        getPreferences(0).edit().putBoolean("ssl_trust_" + origin, true).apply();
+                        if (!pin.isEmpty()) {
+                            getPreferences(0).edit().putString("ssl_trust_" + origin, pin).apply();
+                        }
                         handler.proceed();
                     })
                     .setNegativeButton(R.string.ssl_cancel, (d, w) -> handler.cancel())

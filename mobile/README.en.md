@@ -24,9 +24,9 @@ $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
 ./scripts/build-android.ps1
 ```
 
-- `dist/StreamWebRom-Android.apk`: installable signed release, produced when the repository defines the signing secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`).
+- `dist/StreamWebRom-Android.apk`: installable signed release, produced when the repository defines the signing secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`). Those GitHub secrets live in CI and **do not reach your machine**: to sign locally run `scripts/build-android.ps1` with `SWR_KEYSTORE` (path to the .jks), `SWR_KEYSTORE_PASSWORD`, `SWR_KEY_ALIAS` and `SWR_KEY_PASSWORD`; without them the script produces only debug and unsigned.
 - `dist/StreamWebRom-Android-debug.apk`: installable for tests. The debug key stays outside the repository.
-- `dist/StreamWebRom-Android-unsigned.apk`: **not installable as-is** — Android rejects unsigned packages with a parse error. Sign it with your distribution key first, e.g. `apksigner sign --ks your.jks --out StreamWebRom-Android.apk app-release-unsigned.apk`.
+- `dist/StreamWebRom-Android-unsigned.apk`: **not installable as-is** — Android rejects unsigned packages with a parse error. Sign it with your distribution key, e.g. `apksigner sign --ks your.jks --out dist/StreamWebRom-Android.apk dist/StreamWebRom-Android-unsigned.apk`.
 
 The app asks before trusting an untrusted certificate (e.g. the server's self-signed LAN mode), per server origin; plain HTTP is not accepted. Minimizing without Background mode reloads the room when you return — the app shows a reminder.
 
