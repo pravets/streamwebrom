@@ -66,6 +66,11 @@ func (f snifferFactory) NewInterceptor(_ string) (interceptor.Interceptor, error
 type pumpCtl struct {
 	cancel context.CancelFunc
 	paused atomic.Bool
+	// sent counts the RTP packets the pump actually wrote. The forwarder test
+	// compares against it instead of assuming the ticker rate: a loaded CI box
+	// (or -race) drops ticks, and a fixed threshold would then fail without a
+	// regression in the Forwarder.
+	sent atomic.Int64
 }
 
 func (p *pumpCtl) stop()       { p.cancel() }
@@ -73,7 +78,7 @@ func (p *pumpCtl) pause(v bool) { p.paused.Store(v) }
 
 // pumpFeedback mirrors internal/server's pump: a real pion track carrying a
 // minimal VP8 keyframe-looking payload at ~100 pkt/s; the SFU never decodes it.
-func pumpFeedback(ctx context.Context, track *webrtc.TrackLocalStaticRTP, paused *atomic.Bool) {
+func pumpFeedback(ctx context.Context, track *webrtc.TrackLocalStaticRTP, paused *atomic.Bool, sent *atomic.Int64) {
 	seq := uint16(0)
 	ts := uint32(0)
 	payload := append([]byte{0x10, 0x00, 0x00, 0x9d, 0x01, 0x2a}, bytes.Repeat([]byte{0xAB}, 400)...)
@@ -89,7 +94,9 @@ func pumpFeedback(ctx context.Context, track *webrtc.TrackLocalStaticRTP, paused
 			}
 			seq++
 			ts += 3000
-			_ = track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: seq, Timestamp: ts, PayloadType: 96}, Payload: payload})
+			if err := track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: seq, Timestamp: ts, PayloadType: 96}, Payload: payload}); err == nil && sent != nil {
+				sent.Add(1)
+			}
 		}
 	}
 }
@@ -164,7 +171,7 @@ func startPublisher(t *testing.T, e *Engine, id string) (*webrtc.PeerConnection,
 	ctx, cancel := context.WithCancel(context.Background())
 	ctl := &pumpCtl{cancel: cancel}
 	t.Cleanup(cancel)
-	go pumpFeedback(ctx, track, &ctl.paused)
+	go pumpFeedback(ctx, track, &ctl.paused, &ctl.sent)
 
 	deadline := time.After(5 * time.Second)
 	for pub.ConnectionState() != webrtc.PeerConnectionStateConnected {
@@ -286,7 +293,7 @@ func TestSlowSinkMustNotStarveForwarder(t *testing.T) {
 	}
 	defer e.Close()
 
-	_, _, stream, sniff, _, _ := startPublisher(t, e, "cam")
+	_, _, stream, sniff, _, ctl := startPublisher(t, e, "cam")
 	fs := stream.Forwarders()
 	if len(fs) == 0 {
 		t.Fatal("no forwarders")
@@ -297,14 +304,21 @@ func TestSlowSinkMustNotStarveForwarder(t *testing.T) {
 	defer remove()
 
 	before, _ := fs[0].Stats()
+	sentBefore := ctl.sent.Load()
 	time.Sleep(2 * time.Second)
 	after, _ := fs[0].Stats()
-	processed := after - before
+	sentDelta := ctl.sent.Load() - sentBefore
+	processed := int64(after - before)
 	delta := maxRecvDelta(sniff.snapshot())
-	t.Logf("with one 50ms-stall sink: forwarder processed %d packets in 2s (pump=100/s, want ~200); sink writes=%d; max TWCC recv delta=%dus (=%dms, nominal ~10ms)",
-		processed, sink.n.Load(), delta, delta/1000)
-	if processed < 150 {
-		t.Fatalf("one slow sink throttled the forwarder to %d pkt/2s (want >=150): publisher TWCC arrival times distort and delay-based BWE collapses", processed)
+	t.Logf("with one 50ms-stall sink: forwarder processed %d of %d sent packets in 2s; sink writes=%d; max TWCC recv delta=%dus (=%dms, nominal ~10ms)",
+		processed, sentDelta, sink.n.Load(), delta, delta/1000)
+	// Compare against what the pump really sent: a fixed 150/2s threshold
+	// assumed a perfect 100 pkt/s ticker, which a loaded runner does not honour.
+	if sentDelta < 50 {
+		t.Fatalf("pump only sent %d packets in 2s, too few to judge the forwarder", sentDelta)
+	}
+	if min := sentDelta * 3 / 4; processed < min {
+		t.Fatalf("one slow sink throttled the forwarder to %d of %d sent packets (want >=%d): publisher TWCC arrival times distort and delay-based BWE collapses", processed, sentDelta, min)
 	}
 }
 
