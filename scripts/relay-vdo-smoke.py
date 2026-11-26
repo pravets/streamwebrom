@@ -53,7 +53,9 @@ with sync_playwright() as pw:
     page.add_init_script('window.__pcs=[];const PC=window.RTCPeerConnection;window.RTCPeerConnection=class extends PC{constructor(...args){super(...args);window.__pcs.push(this)}}')
     page.goto(args.url+'/studio?room='+k['room']+'#key='+k['hostKey']);expect(page.locator('#status')).to_have_text('conectado')
     page.locator('#addCam').click();expect(page.locator('#backstage .tile')).to_have_count(1,timeout=15000)
-    assert page.locator('#backstage .tile button').count()==2
+    assert page.locator('#backstage .tile .stagebtn').count()==1
+    assert page.locator('#backstage .tile .source-options').count()==1
+    assert page.locator('#backstage .tile .accentbtn').count()==1
     small=page.locator('#backstage .tile video').bounding_box()
     page.locator('#backstage .source-options').click();expect(page.locator('#sourceSettings')).to_be_visible()
     large=page.locator('#sourceSettingsVideo').bounding_box();assert large['width']>small['width']*2
