@@ -66,6 +66,47 @@ test('immersive locks orientation only after fullscreen succeeds and unlocks on 
   doc.fullscreenElement = null;
 });
 
+test('a stale fullscreenchange during entry cannot cancel the new cinema session', async () => {
+  const order = [];
+  const root = node(), button = node(), exit = node();
+  let release;
+  root.requestFullscreen = () => new Promise((resolve) => { release = () => { doc.fullscreenElement = root; resolve(); }; });
+  globalThis.screen = { orientation: { lock: async () => { order.push('lock'); }, unlock: () => { order.push('unlock'); } } };
+  const cinema = immersive(root, button, exit, {
+    onFullscreen: () => orientation.lockLandscape(),
+    onExitFullscreen: () => orientation.unlockLandscape(),
+  });
+  const entering = cinema.enter();
+  // The exit of an earlier session lands while the new request is in flight.
+  doc.fullscreenElement = null;
+  doc.dispatchEvent(new Event('fullscreenchange'));
+  assert.equal(root.classList.contains('cinema'), true, 'entry must survive a stale event');
+  release();
+  await entering;
+  assert.deepEqual(order, ['lock'], 'the newer entry still locks orientation');
+  assert.equal(root.classList.contains('cinema'), true);
+  cinema.destroy();
+  doc.fullscreenElement = null;
+  order.length = 0;
+});
+
+test('a real exit after the entry settled still leaves cinema mode', async () => {
+  const order = [];
+  const root = node(), button = node(), exit = node();
+  root.requestFullscreen = async () => { doc.fullscreenElement = root; };
+  globalThis.screen = { orientation: { lock: async () => { order.push('lock'); }, unlock: () => { order.push('unlock'); } } };
+  const cinema = immersive(root, button, exit, {
+    onFullscreen: () => orientation.lockLandscape(),
+    onExitFullscreen: () => orientation.unlockLandscape(),
+  });
+  await cinema.enter();
+  doc.fullscreenElement = null;
+  doc.dispatchEvent(new Event('fullscreenchange'));
+  assert.deepEqual(order, ['lock', 'unlock']);
+  assert.equal(root.classList.contains('cinema'), false);
+  cinema.destroy();
+});
+
 test('a rejected fullscreen keeps cinema mode and never locks orientation', async () => {
   const order = [];
   const root = node(), button = node(), exit = node();

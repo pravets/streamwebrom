@@ -172,6 +172,19 @@ export function unreadAfter(state, m, openKey, myId, visible = true) {
 }
 
 /**
+ * Badge state after the pane shows `key`. Visible pane: the conversation is
+ * read, so its counter drops. Hidden pane: the counter stays until the user
+ * actually looks at it. Pure: returns a new object.
+ */
+export function unreadOnShow(state, key, visible = true) {
+  if (!visible) return state;
+  if (!(key in state)) return state;
+  const next = { ...state };
+  delete next[key];
+  return next;
+}
+
+/**
  * Wire a chat pane (log + composer + conversation switcher). Shared by the
  * studio tab and the guest drawer. opts:
  *   log, switcher, input, sendButton  DOM nodes
@@ -267,13 +280,20 @@ export function createChat(opts) {
     // A policy change can forbid the open conversation: fall back to general.
     if (openKey !== GENERAL) {
       const other = peers().find((p) => p.id === peerOf(openKey));
-      if (policy() === "off" || (other && !canDM(other))) { setOpen(GENERAL); renderLog(); }
+      if (policy() === "off" || (other && !canDM(other))) {
+        setOpen(GENERAL);
+        // The pane is on screen with the general chat open, so its badge must
+        // not survive the automatic switch. A hidden pane keeps the counter
+        // until the user actually looks at it.
+        unread = unreadOnShow(unread, GENERAL, visible());
+        renderLog();
+      }
     }
     renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
   }
   function open(key) {
     setOpen(key);
-    delete unread[key];
+    unread = unreadOnShow(unread, key);
     renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
   }
   function receive(m) {

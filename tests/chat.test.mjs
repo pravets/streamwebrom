@@ -4,7 +4,7 @@ import { moduleURL } from './module-url.mjs';
 
 // chat.js imports rtc.js, which reads location at module scope.
 globalThis.location = { search: '', hash: '' };
-const { GENERAL, conversationKey, dmPeer, unreadAfter } = await import(await moduleURL('chat.js'));
+const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow } = await import(await moduleURL('chat.js'));
 
 test('conversationKey is the sorted pair, symmetric and never the general key', () => {
   assert.equal(conversationKey('bob', 'ana'), conversationKey('ana', 'bob'));
@@ -64,6 +64,18 @@ test('a dm echo and its delivery share one conversation key', () => {
   let s = unreadAfter({}, delivery, GENERAL, 'me');
   s = unreadAfter(s, echo, GENERAL, 'me');
   assert.deepEqual(s, { 'ana|me': 1 }, 'the echo adds nothing');
+});
+
+test('showing a conversation clears its badge only when the pane is visible', () => {
+  const state = { [GENERAL]: 2, 'ana|me': 3 };
+  // Visible: opening a conversation marks exactly that one as read.
+  assert.deepEqual(unreadOnShow(state, GENERAL, true), { 'ana|me': 3 });
+  assert.deepEqual(unreadOnShow(state, 'ana|me'), { [GENERAL]: 2 }, 'visibility defaults to true');
+  // Hidden: the counter survives until the user actually looks at the pane.
+  assert.deepEqual(unreadOnShow(state, GENERAL, false), state);
+  // Pure and idempotent: no mutation, and an absent key changes nothing.
+  assert.deepEqual(state, { [GENERAL]: 2, 'ana|me': 3 });
+  assert.equal(unreadOnShow(state, 'bob|me', true), state);
 });
 
 test('a hidden panel never marks the open conversation as read', () => {
