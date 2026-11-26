@@ -8,6 +8,8 @@ export const es = {
   "server.cloudflare_unavailable": "El administrador no ha habilitado el acceso protegido a Cloudflare",
   "server.dm_disabled": "Los mensajes directos están desactivados en esta sala",
   "server.dm_host_only": "Los invitados solo pueden escribir al anfitrión",
+  "server.dm_sticker_invalid": "Pegatina desconocida",
+  "server.dm_target_invalid": "Destinatario no válido",
   "server.dm_target_unavailable": "Ese participante no puede recibir mensajes directos",
   "server.dm_viewer": "Los espectadores no pueden enviar mensajes directos",
   "server.rate_limited": "Demasiadas peticiones, espera un momento",

@@ -490,26 +490,15 @@ func (h *Hub) dm(p *Peer, m Msg) error {
 	r := p.room
 	role := p.role()
 	if role == RoleViewer {
-		return Userf("dm_viewer", "viewers cannot send direct messages")
-	}
-	switch dmPolicyOf(r.Snapshot()) {
-	case "off":
-		return Userf("dm_disabled", "direct messages are disabled in this room")
-	case "host-only":
-		if role != RoleHost {
-			target := h.peerByID(r, m.To)
-			if target == nil || target.role() != RoleHost {
-				return Userf("dm_host_only", "guests can only message the host")
-			}
-		}
+		return Userf("dm_viewer", "Los espectadores no pueden enviar mensajes directos")
 	}
 	if m.To == "" || m.To == p.ID {
-		return errors.New("invalid dm target")
+		return Userf("dm_target_invalid", "Destinatario no válido")
 	}
 	c := Comment{ID: token(8), From: p.Name, Source: "dm", TS: time.Now().UnixMilli(), PeerID: p.ID, Role: role, To: m.To}
 	if m.Kind == "sticker" {
 		if !validSticker(m.Text) {
-			return errors.New("unknown sticker")
+			return Userf("dm_sticker_invalid", "Pegatina desconocida")
 		}
 		c.Sticker = m.Text
 	} else {
@@ -518,8 +507,8 @@ func (h *Hub) dm(p *Peer, m Msg) error {
 			return nil
 		}
 	}
-	// Recipient check and history append share one lock: a reconnect between
-	// them would rebind the conversation and hide this message from history.
+	// Policy, recipient and history append share one lock: neither a policy
+	// change nor a reconnect can land between the checks and the append.
 	if err := r.addDMChecked(c); err != nil {
 		return err
 	}
@@ -600,7 +589,24 @@ func (h *Hub) join(p *Peer, m Msg) error {
 		p.mu.Unlock()
 		r.peers[p.ID] = p
 	}
+	// One rejoin pass is one live session: a second join with the same pass
+	// (a reload racing its old socket, a second tab, or someone replaying a
+	// leaked pass) takes over, and the previous connection is told so. Without
+	// this the two sessions would fight over the dm history keyed by the pass.
+	var evicted []*Peer
+	if rejoin {
+		evicted = r.evictPassLocked(m.Rejoin, p.ID)
+	}
 	r.mu.Unlock()
+
+	for _, old := range evicted {
+		// Do not revoke the pass: it now belongs to the fresh session. The
+		// client stops reconnecting when it sees "kicked", so the two ends do
+		// not ping-pong the pass between them.
+		old.Send(Msg{Type: "kicked"})
+		time.AfterFunc(200*time.Millisecond, old.close)
+		h.log.Info("rejoin pass taken over by a new session", "room", r.ID, "peer", old.ID, "new", p.ID)
+	}
 
 	if lobby {
 		p.Send(Msg{Type: "waiting", PeerID: p.ID})
@@ -1127,9 +1133,11 @@ func (h *Hub) hostAction(host *Peer, m Msg) error {
 		}
 		return nil
 	case "chat-delete": // moderation: remove one message by Comment.ID
+		// Idempotent by design: a double click or a client retry must not turn
+		// into an error modal for the moderator.
 		inChat, pair, ok := r.deleteComment(m.Target)
 		if !ok {
-			return errors.New("comment not found")
+			return nil
 		}
 		if inChat {
 			r.broadcast(Msg{Type: "chat-deleted", ID: m.Target}, "")
@@ -1143,13 +1151,16 @@ func (h *Hub) hostAction(host *Peer, m Msg) error {
 		// A deleted message must not stay featured on the program output; a
 		// newer featured comment set meanwhile must survive. Skip the state
 		// broadcast entirely when this comment was not the featured one.
-		_ = r.Update(func(st *State) error {
+		if err := r.Update(func(st *State) error {
 			if st.Comment == nil || st.Comment.ID != m.Target {
 				return errStateUnchanged
 			}
 			st.Comment = nil
 			return nil
-		})
+		}); err != nil && !errors.Is(err, errStateUnchanged) {
+			// The message is already gone: report the failure without undoing it.
+			h.log.Warn("chat-delete: featured comment not cleared", "room", r.ID, "id", m.Target, "err", err)
+		}
 		return nil
 	case "state":
 		return h.setState(r, m)
@@ -1361,7 +1372,7 @@ func (h *Hub) setState(r *Room, m Msg) error {
 			case "dmPolicy": // who may send direct messages: all | host-only | off
 				var pol string
 				if err = json.Unmarshal(v, &pol); err == nil {
-					if !slices.Contains(DMPolicies, pol) {
+					if !validDMPolicy(pol) {
 						return errors.New("invalid dm policy")
 					}
 					st.DMPolicy = pol

@@ -1,6 +1,9 @@
 package studio
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // stickerIDs are the built-in chat stickers; keep in sync with web/js/stickers.js.
 var stickerIDs = []string{
@@ -10,15 +13,26 @@ var stickerIDs = []string{
 
 func validSticker(id string) bool { return slices.Contains(stickerIDs, id) }
 
-// DMPolicies are the allowed direct-message policies for State.DMPolicy.
-// An empty policy (rooms saved before dm existed) means "all".
-var DMPolicies = []string{"all", "host-only", "off"}
+// dmPolicies are the allowed direct-message policies for State.DMPolicy.
+var dmPolicies = []string{"all", "host-only", "off"}
 
+// validDMPolicy reports whether a policy string may be stored in the room.
+func validDMPolicy(policy string) bool { return slices.Contains(dmPolicies, policy) }
+
+// dmPolicyOf normalises a stored policy. An empty policy (rooms saved before
+// dm existed) means "all"; anything unknown fails closed, so a typo can never
+// switch direct messages on behind the host's back.
 func dmPolicyOf(st State) string {
-	if st.DMPolicy == "" {
+	switch st.DMPolicy {
+	case "", "all":
 		return "all"
+	case "host-only":
+		return "host-only"
+	case "off":
+		return "off"
+	default:
+		return "off"
 	}
-	return st.DMPolicy
 }
 
 // dmKey is the conversation key: the sorted pair of peer ids. Peer ids are
@@ -29,3 +43,6 @@ func dmKey(a, b string) string {
 	}
 	return a + "|" + b
 }
+
+// dmKeyParts splits a conversation key back into its peer ids.
+func dmKeyParts(key string) (a, b string, ok bool) { return strings.Cut(key, "|") }

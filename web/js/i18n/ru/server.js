@@ -8,6 +8,8 @@ export const ru = {
   "server.cloudflare_unavailable": "Администратор не включил защищённый доступ через Cloudflare",
   "server.dm_disabled": "Личные сообщения в этой комнате отключены",
   "server.dm_host_only": "Гости могут писать только ведущему",
+  "server.dm_sticker_invalid": "Неизвестная наклейка",
+  "server.dm_target_invalid": "Недопустимый получатель",
   "server.dm_target_unavailable": "Этот участник не может получать личные сообщения",
   "server.dm_viewer": "Зрители не могут отправлять личные сообщения",
   "server.rate_limited": "Слишком много запросов, подождите немного",

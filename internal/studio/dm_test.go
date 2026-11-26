@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -19,8 +20,11 @@ func dmFixture(t *testing.T) (*Hub, *Room, *Peer, *Peer, *Peer) {
 	}
 	host, g1, g2 := newPeer(nil, nil), newPeer(nil, nil), newPeer(nil, nil)
 	host.ID, host.Role, host.room = "host", RoleHost, r
-	g1.ID, g1.Role, g1.room = "guest-one", RoleGuest, r
-	g2.ID, g2.Role, g2.room = "guest-two", RoleGuest, r
+	// Guests carry a rejoin pass and own it in dmPeerByPass, exactly as after
+	// welcome/issuePass: a dm to a guest without a live pass is rejected.
+	g1.ID, g1.Role, g1.room, g1.pass = "guest-one", RoleGuest, r, "pass-one"
+	g2.ID, g2.Role, g2.room, g2.pass = "guest-two", RoleGuest, r, "pass-two"
+	r.dmPeerByPass = map[string]string{"pass-one": g1.ID, "pass-two": g2.ID}
 	host.Name, g1.Name, g2.Name = "Host", "Ana", "Bob"
 	r.peers[host.ID], r.peers[g1.ID], r.peers[g2.ID] = host, g1, g2
 	return &Hub{}, r, host, g1, g2
@@ -48,6 +52,14 @@ func dmQuiet(t *testing.T, p *Peer) {
 		t.Fatalf("unexpected message for %s: %s", p.ID, b)
 	default:
 	}
+}
+
+// addDMForTest stores a dm without recipient validation so tests can seed
+// history for peers that are gone or only partially simulated.
+func (r *Room) addDMForTest(c Comment) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appendDMLocked(c)
 }
 
 func dmDrain(p *Peer) {
@@ -394,9 +406,12 @@ func TestChatDeleteModeration(t *testing.T) {
 	if len(r.dmHistory(g1.ID)) != 0 || len(r.dmHistory(host.ID)) != 0 {
 		t.Fatal("deleted dm kept in history")
 	}
-	if err := h.handle(ctx, host, Msg{Type: "chat-delete", Target: "nope"}); err == nil {
-		t.Fatal("unknown comment id accepted")
+	// Deleting an id that is already gone is a no-op, not an error: a double
+	// click or a client retry must not surface a failure to the moderator.
+	if err := h.handle(ctx, host, Msg{Type: "chat-delete", Target: "nope"}); err != nil {
+		t.Fatalf("idempotent delete returned an error: %v", err)
 	}
+	dmQuiet(t, g1)
 }
 
 func TestDMHistoryCap200(t *testing.T) {
@@ -418,13 +433,13 @@ func TestDMHistoryCap200(t *testing.T) {
 
 func TestDMCheckedRecipientAtomic(t *testing.T) {
 	_, r, host, g1, _ := dmFixture(t)
-	if err := r.addDMChecked(Comment{ID: "x1", PeerID: host.ID, To: "ghost", Text: "hi"}); err == nil {
-		t.Fatal("expected peer not found")
+	if err := r.addDMChecked(Comment{ID: "x1", PeerID: host.ID, To: "ghost", Text: "hi"}); err == nil || CodeOf(err) != "dm_target_unavailable" {
+		t.Fatalf("expected dm_target_unavailable for a vanished peer, got %v", err)
 	}
 	waiting := newPeer(nil, nil)
 	waiting.ID, waiting.Role, waiting.room = "wait", RoleGuest, r
 	r.waiting[waiting.ID] = waiting
-	if err := r.addDMChecked(Comment{ID: "x2", PeerID: host.ID, To: waiting.ID, Text: "hi"}); err == nil || !strings.Contains(err.Error(), "cannot receive") {
+	if err := r.addDMChecked(Comment{ID: "x2", PeerID: host.ID, To: waiting.ID, Text: "hi"}); err == nil || CodeOf(err) != "dm_target_unavailable" {
 		t.Fatalf("expected dm_target_unavailable, got %v", err)
 	}
 	if err := r.addDMChecked(Comment{ID: "x3", PeerID: host.ID, To: g1.ID, Text: "hi"}); err != nil {
@@ -435,25 +450,136 @@ func TestDMCheckedRecipientAtomic(t *testing.T) {
 	}
 }
 
+// A guest whose session no longer owns its rejoin pass is not a valid dm
+// target: after a reconnect the old peer lingers in r.peers (until pongWait)
+// while the conversation already moved to the fresh id, so a dm here would be
+// written where nobody will ever read it.
+func TestDMRejectedForStalePassOwner(t *testing.T) {
+	_, r, host, g1, _ := dmFixture(t)
+	r.mu.Lock()
+	g1.pass = "pass-g1"
+	r.dmPeerByPass["pass-g1"] = "fresh-g1" // the conversation moved to a new peer id
+	r.mu.Unlock()
+	if err := r.addDMChecked(Comment{ID: "s1", PeerID: host.ID, To: g1.ID, Text: "lost"}); err == nil || CodeOf(err) != "dm_target_unavailable" {
+		t.Fatalf("stale pass owner accepted: %v", err)
+	}
+	if got := r.dmHistory(g1.ID); len(got) != 0 {
+		t.Fatalf("message stored for a stale peer: %+v", got)
+	}
+	r.mu.Lock()
+	r.dmPeerByPass["pass-g1"] = g1.ID // the live session owns it again
+	r.mu.Unlock()
+	if err := r.addDMChecked(Comment{ID: "s2", PeerID: host.ID, To: g1.ID, Text: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRebindKeepsMessagesArrivedBeforeRebind(t *testing.T) {
 	_, r, host, g1, _ := dmFixture(t)
-	for i := 0; i < 200; i++ {
-		r.addDM(Comment{ID: fmt.Sprintf("old%d", i), PeerID: host.ID, To: "old-g1", Text: "o", TS: int64(100 + i)})
+	// The old session is still in r.peers, as it is for pongWait after a
+	// reconnect; the pass already points at the fresh id.
+	old := newPeer(nil, nil)
+	old.ID, old.Role, old.room, old.pass = "old-g1", RoleGuest, r, "pass-g1"
+	r.peers[old.ID] = old
+	for i := 0; i < maxHistory; i++ {
+		r.addDMForTest(Comment{ID: fmt.Sprintf("old%d", i), PeerID: host.ID, To: old.ID, Text: "o", TS: int64(100 + i)})
 	}
 	// Arrives on the fresh id before the reconnect rebinds the history.
-	r.addDM(Comment{ID: "new", PeerID: host.ID, To: g1.ID, Text: "n", TS: 900})
+	r.addDMForTest(Comment{ID: "new", PeerID: host.ID, To: g1.ID, Text: "n", TS: 900})
 	r.mu.Lock()
-	r.rebindDMLocked("old-g1", g1.ID)
+	r.rebindDMLocked(old.ID, g1.ID)
 	r.mu.Unlock()
 	hist := r.dmHistory(g1.ID)
-	if len(hist) != 200 {
-		t.Fatalf("len %d, want 200", len(hist))
+	if len(hist) != maxHistory {
+		t.Fatalf("len %d, want %d", len(hist), maxHistory)
 	}
 	if hist[len(hist)-1].ID != "new" {
 		t.Fatalf("new message dropped by cap: %+v", hist[len(hist)-1])
 	}
 	if hist[0].ID != "old1" {
 		t.Fatalf("oldest should be dropped first, got %s", hist[0].ID)
+	}
+}
+
+// welcome.dms is capped across all conversations, not only per conversation:
+// three full conversations (3*200 = 600) must be trimmed to maxWelcomeDMs.
+func TestDMHistoryTotalCap(t *testing.T) {
+	_, r, host, g1, g2 := dmFixture(t)
+	partners := []string{host.ID, g2.ID, "guest-three"}
+	per := maxHistory
+	for pi, to := range partners {
+		for i := 0; i < per; i++ {
+			r.addDMForTest(Comment{ID: fmt.Sprintf("m%1d-%03d", pi, i), PeerID: g1.ID, To: to, Text: "x", TS: int64(pi*per + i)})
+		}
+	}
+	hist := r.dmHistory(g1.ID)
+	if len(hist) != maxWelcomeDMs {
+		t.Fatalf("catch-up %d, want %d", len(hist), maxWelcomeDMs)
+	}
+	if want := fmt.Sprintf("m%1d-%03d", len(partners)-1, per-1); hist[len(hist)-1].ID != want {
+		t.Fatalf("newest message lost: %s, want %s", hist[len(hist)-1].ID, want)
+	}
+	if want := fmt.Sprintf("m%1d-%03d", 0, len(partners)*per-maxWelcomeDMs); hist[0].ID != want {
+		t.Fatalf("oldest kept is %s, want %s", hist[0].ID, want)
+	}
+}
+
+// Two sessions cannot share one rejoin pass: the second join takes over and
+// the first is told, so the dm history keyed by the pass has a single owner.
+func TestRejoinPassEvictsPreviousSession(t *testing.T) {
+	_, r, host, g1, g2 := dmFixture(t)
+	_ = host
+	r.mu.Lock()
+	g1.pass = "shared-pass"
+	r.dmPeerByPass["shared-pass"] = g1.ID
+	fresh := newPeer(nil, nil)
+	fresh.ID, fresh.Role, fresh.room = "guest-fresh", RoleGuest, r
+	evicted := r.evictPassLocked("shared-pass", fresh.ID)
+	r.mu.Unlock()
+	if len(evicted) != 1 || evicted[0] != g1 {
+		t.Fatalf("evicted %v, want the previous owner of the pass", evicted)
+	}
+	// A different pass, or the keeper itself, evicts nobody.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if got := r.evictPassLocked("another-pass", fresh.ID); len(got) != 0 {
+		t.Fatalf("unrelated pass evicted %v", got)
+	}
+	if got := r.evictPassLocked("shared-pass", g1.ID); len(got) != 0 {
+		t.Fatalf("keeper evicted itself: %v", got)
+	}
+	_ = g2
+}
+
+// dms, public chat and moderation run from different goroutines in production;
+// this keeps the locking honest under -race.
+func TestDMAndChatConcurrent(t *testing.T) {
+	h, r, host, g1, g2 := dmFixture(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(3)
+		go func(i int) {
+			defer wg.Done()
+			if err := h.handle(context.Background(), g1, Msg{Type: "dm", To: host.ID, Text: fmt.Sprintf("c%d", i)}); err != nil {
+				t.Errorf("dm: %v", err)
+			}
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			if err := h.handle(context.Background(), g2, Msg{Type: "chat", Text: fmt.Sprintf("p%d", i)}); err != nil {
+				t.Errorf("chat: %v", err)
+			}
+		}(i)
+		go func() {
+			defer wg.Done()
+			if err := h.handle(context.Background(), host, Msg{Type: "chat-delete", Target: "gone"}); err != nil {
+				t.Errorf("delete: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := r.dmHistory(g1.ID); len(got) != 20 {
+		t.Fatalf("dm history %d, want 20", len(got))
 	}
 }
 

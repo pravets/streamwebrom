@@ -8,6 +8,8 @@ export const en = {
   "server.cloudflare_unavailable": "The administrator has not enabled protected Cloudflare access",
   "server.dm_disabled": "Direct messages are disabled in this room",
   "server.dm_host_only": "Guests can only message the host",
+  "server.dm_sticker_invalid": "Unknown sticker",
+  "server.dm_target_invalid": "Invalid recipient",
   "server.dm_target_unavailable": "That participant cannot receive direct messages",
   "server.dm_viewer": "Viewers cannot send direct messages",
   "server.rate_limited": "Too many requests, wait a moment",
