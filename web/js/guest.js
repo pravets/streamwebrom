@@ -274,6 +274,11 @@ async function resume(m) {
   myId = m.peerId;
   const mine = $('[data-id="me"]'); if (mine) mine.dataset.peer = myId;
   state = m.state || state;
+  // Apply the snapshot before the first await: chat and peer events arriving
+  // during publication must add to it, not be wiped by a late seed().
+  peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
+  chatPanel.seed(m.chat || [], m.dms || []); // catch up on what we missed
+  refreshDmButtons();
   // Clear only the old session before awaiting publication. A stream-added
   // received during negotiation belongs to the new session and must survive.
   for (const id of [...remoteInfo.keys()]) unwatch(id);
@@ -294,9 +299,6 @@ async function resume(m) {
       if (x.tile) { x.tile.dataset.id = fresh.id; x.tile.dataset.peer = myId; }
     } catch (e) { if (!sig.closed && sig.ws === socket) toast(t("guest.extraCamFailed", { error: e.message }),"err"); }
   }
-  peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
-  chatPanel.seed(m.chat || [], m.dms || []); // catch up on what we missed
-  refreshDmButtons();
   sendMedia();
 }
 
@@ -310,16 +312,18 @@ async function enter(m) {
   if (params.has("muted") || params.has("mute")) media.getAudioTracks().forEach((t) => (t.enabled = false));
   if (params.has("videomute") || params.has("vm")) media.getVideoTracks().forEach((t) => (t.enabled = false));
   addTile("me", media, $("#name").value + " " + t("guest.youBadge"), true, levelMeter(media));
+  // Snapshot first, then await publication: messages and peers arriving
+  // during connectMedia() must complement the snapshot, not be reset by it.
+  peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
+  chatPanel.seed(m.chat || [], m.dms || []);
+  refreshDmButtons();
   await connectMedia();
   if (sig.closed) return;
   setMic(micOn()); setCam(camOn());
   // Apply the prejoin choices (URL flag > saved preference > checkbox) on entry.
   setSelfDeafened($("#deafenPre").checked);
   setLandscapeMode($("#landscapePre").checked);
-  peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
   for (const s of m.streams || []) watch(s.id, s.kind, s.owner, "", s.revision);
-  chatPanel.seed(m.chat || [], m.dms || []);
-  refreshDmButtons();
   updateStageBadge();
   if (params.has("screenshare") || params.has("ss")) $("#screenBtn").click();
 }
@@ -567,7 +571,12 @@ function setSelfDeafened(on, announce = false) {
   const pre = $("#deafenPre"); if (pre) pre.checked = selfDeafened;
   renderDeafenBtn();
   applyRoomMute();
-  if (announce) toast(t(selfDeafened ? "guest.selfDeafenedNote" : "guest.selfUndeafenedNote"), selfDeafened ? "" : "ok");
+  // Undeafening myself does not restore the room audio while the host's
+  // deafen is still active: pick the note by the effective mute state.
+  if (announce) {
+    const stillMuted = effectiveDeafen(deafened, selfDeafened);
+    toast(t(selfDeafened ? "guest.selfDeafenedNote" : stillMuted ? "guest.selfUndeafenedHostNote" : "guest.selfUndeafenedNote"), selfDeafened || stillMuted ? "" : "ok");
+  }
 }
 function setLandscapeMode(on, announce = false) {
   landscapeMode = !!on;
@@ -751,6 +760,7 @@ const chatPanel = createChat({
   peers: () => [...peers.values()],
   canDM,
   policy: () => state.dmPolicy || "all",
+  visible: () => !$("#chat").classList.contains("hidden"),
   onUnread: (n) => $("#chatBtn").classList.toggle("on", n > 0),
   onMention: (c) => { if ($("#chat").classList.contains("hidden")) toast(t("guest.mentioned", { name: c.from })); },
 });

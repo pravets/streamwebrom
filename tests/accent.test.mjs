@@ -72,3 +72,24 @@ test('quickAccent never duplicates a stage entry and toggles idempotently', () =
   const thrice = quickAccent(twice, 'a');
   assert.deepEqual(thrice, once, 'click on/off/on returns to the same state');
 });
+
+test('a featured the layout ignores is not active: one click applies the accent', () => {
+  const scene = { stage: ['a', 'b'], layout: 'grid', featured: 'a' };
+  const next = quickAccent(scene, 'a');
+  assert.equal(next.featured, 'a');
+  assert.equal(next.layout, 'spotlight', 'the first click must apply, not silently clear the hidden featured');
+  assert.deepEqual(next.stage, ['a', 'b'], 'the line-up is kept');
+  assert.equal(accentApplies(next.layout, next.stage, next.featured), true);
+  const off = quickAccent(next, 'a');
+  assert.equal(off.featured, '', 'only an applied accent toggles off');
+  assert.equal(off.layout, 'spotlight');
+});
+
+test('a featured source missing from the stage is re-added in one click', () => {
+  const scene = { stage: ['b'], layout: 'spotlight', featured: 'a' };
+  assert.equal(accentApplies(scene.layout, scene.stage, scene.featured), false);
+  const next = quickAccent(scene, 'a');
+  assert.deepEqual(next.stage, ['b', 'a']);
+  assert.equal(next.featured, 'a');
+  assert.equal(next.layout, 'spotlight', 'an accent layout is kept');
+});

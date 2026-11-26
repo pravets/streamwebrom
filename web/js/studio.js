@@ -513,7 +513,9 @@ $("#sourceSettings").addEventListener("close", () => {
 // already in this scene's line-up: say why instead of offering a silent no-op.
 function accentButton(id) {
   const scene = sceneOf(editScene);
-  const active = scene.featured === id;
+  // A `featured` the current layout ignores is not an active accent: the
+  // button must agree with what the compositor actually applies.
+  const active = scene.featured === id && accentApplies(scene.layout, scene.stage, scene.featured);
   const inStage = scene.stage.includes(id);
   const supported = ACCENT_LAYOUTS.includes(scene.layout);
   const why = !inStage ? t(editScene === "1" ? "studiojs.accentNeedsProgram" : "studiojs.accentNeedsScene", { n: editScene })
@@ -576,7 +578,8 @@ function renderBackstage() {
     }
     if (s.preview.srcObject !== s.stream) { s.preview.srcObject = s.stream; s.preview.play().catch(() => {}); }
     const progMuted = !!state.muted?.[id], hidden = !!state.hidden?.[id];
-    const accented = sceneOf(editScene).featured === id;
+    const scene = sceneOf(editScene);
+    const accented = scene.featured === id && accentApplies(scene.layout, scene.stage, scene.featured);
     s.preview.onclick = () => openSourceSettings(id);
     s.preview.tabIndex = 0; s.preview.setAttribute("aria-label", t("studiojs.enlargeAria", { name: s.name }));
     s.preview.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSourceSettings(id); } };
@@ -754,6 +757,7 @@ const chatPanel = createChat({
   peers: () => [...peers.values()],
   canDM: () => (state.dmPolicy || "all") !== "off",
   policy: () => state.dmPolicy || "all",
+  visible: () => !!$('[data-pane="chat"]')?.classList.contains("active") && !$("#studioRoot").classList.contains("panel-collapsed"),
   actionsFor: (c, key) => [
     key === GENERAL ? el("button", { class: "small act", title: t("studiojs.showOnScreen"), onclick: () => setState({ comment: state.comment?.id === c.id ? null : c }), text: "📺" }) : null,
     el("button", { class: "small act", title: t("misc.chatDeleteTitle"), onclick: () => sig.send({ type: "chat-delete", target: c.id }), text: "🗑" }),
@@ -761,6 +765,11 @@ const chatPanel = createChat({
   onUnread: (n) => { const tab = $('#tabs [data-tab="chat"]'); if (n) tab.dataset.unread = n > 99 ? "99+" : String(n); else delete tab.dataset.unread; },
 });
 const openDM = (peerId) => { activateTab("chat"); chatPanel.openDM(peerId); };
+// Re-showing the collapsed panel with the chat tab active makes the open
+// conversation visible again: mark it read just like activateTab("chat") does.
+$("#togglePanel").addEventListener("click", () => {
+  if (!$("#studioRoot").classList.contains("panel-collapsed") && $('[data-pane="chat"]')?.classList.contains("active")) chatPanel.focus();
+});
 
 // ---------- banners ----------
 $("#bannerAdd").onclick = () => {

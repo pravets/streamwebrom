@@ -65,3 +65,19 @@ test('a dm echo and its delivery share one conversation key', () => {
   s = unreadAfter(s, echo, GENERAL, 'me');
   assert.deepEqual(s, { 'ana|me': 1 }, 'the echo adds nothing');
 });
+
+test('a hidden panel never marks the open conversation as read', () => {
+  const chat = { type: 'chat', peerId: 'ana', comment: { peerId: 'ana', text: 'hola' } };
+  const dm = { type: 'dm', peerId: 'ana', to: 'me', comment: { peerId: 'ana', text: 'psst' } };
+  // Closed guest drawer / inactive studio tab: even the open conversation badges.
+  let s = unreadAfter({}, chat, GENERAL, 'me', false);
+  assert.deepEqual(s, { [GENERAL]: 1 }, 'general chat badges while the drawer is closed');
+  s = unreadAfter(s, dm, 'ana|me', 'me', false);
+  assert.deepEqual(s, { [GENERAL]: 1, 'ana|me': 1 }, 'the last selected dm badges too');
+  // Visible again: the open conversation is skipped; own echoes still never count.
+  s = unreadAfter(s, chat, GENERAL, 'me', true);
+  assert.deepEqual(s, { [GENERAL]: 1, 'ana|me': 1 });
+  assert.deepEqual(unreadAfter({}, chat, GENERAL, 'me'), {}, 'visibility defaults to true');
+  const echo = { type: 'dm', peerId: 'me', to: 'ana', comment: { peerId: 'me', text: 'hi' } };
+  assert.deepEqual(unreadAfter({}, echo, GENERAL, 'me', false), {}, 'own echo never badges, hidden or not');
+});

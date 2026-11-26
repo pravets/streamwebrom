@@ -18,10 +18,12 @@ export function accentApplies(layout, stage, featured) {
 
 /** One-click backstage accent: returns a new scene state. Adds `id` to the
  * stage when missing, features it, and switches to "spotlight" if the layout
- * has no accent slot. Clicking the already-featured source clears the accent
- * (featured="") without touching the stage. Pure: the input is not mutated. */
+ * has no accent slot. Clicking the source whose accent the current layout
+ * actually applies clears it (featured="") without touching the stage; a
+ * leftover `featured` that the layout ignores is not "active" and must not
+ * swallow the first click. Pure: the input is not mutated. */
 export function quickAccent(scene, id) {
-  if ((scene.featured || "") === id) return { ...scene, featured: "" };
+  if ((scene.featured || "") === id && accentApplies(scene.layout, scene.stage, scene.featured)) return { ...scene, featured: "" };
   const next = { ...scene, featured: id };
   const stage = scene.stage || [];
   if (!stage.includes(id)) next.stage = [...stage, id];
@@ -208,7 +210,14 @@ export class Compositor {
       if (!r) return;
       const full = r.w >= W - 1;
       ctx.save();
-      if (bubble && !full) { roundRect(ctx, r.x, r.y, r.w, r.h, 18); ctx.clip(); }
+      // Every non-full tile is clipped to its own rectangle: cover (crop)
+      // sources would otherwise paint over the neighbouring tiles when the
+      // theme has no rounded bubble (minimal) or the layout is solo.
+      if (!full) {
+        if (bubble) roundRect(ctx, r.x, r.y, r.w, r.h, 18);
+        else { ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); }
+        ctx.clip();
+      }
       ctx.fillStyle = "#111";
       ctx.fillRect(r.x, r.y, r.w, r.h);
       const hidden = (st.hidden && st.hidden[id]) || s.camOff;

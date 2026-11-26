@@ -63,6 +63,7 @@ export const es = {
   "guest.selfDeafenTitle": "Deja de escuchar la sala solo para ti; tu micrófono sigue funcionando",
   "guest.selfDeafenedNote": "Ya no escuchas la sala. Los participantes siguen escuchándote.",
   "guest.selfUndeafenedNote": "Vuelves a escuchar la sala",
+  "guest.selfUndeafenedHostNote": "Silencio local desactivado; el anfitrión sigue silenciando la sala para ti",
   "guest.addCamera": "Agregar otra cámara",
   "guest.cameraNth": "Cámara {n}",
   "guest.secondCamera": "cámara 2",

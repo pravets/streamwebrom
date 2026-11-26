@@ -29,6 +29,18 @@ test('OBS subscribes only the selected live scene, preserving hidden-source audi
   assert.equal(needsOutputSource({id:'a',kind:'camera'},state,'a','2'),true);
   assert.equal(needsOutputSource({id:'program',kind:'program'},{stage:['program']},null,'1'),false);
 });
+test('explicit per-source tuning and local media override room bandwidth caps', () => {
+  const opts={videoKbps:6000,audioKbps:128,fps:30,explicit:true};
+  for (const size of [{width:1920,height:1080},{width:1080,height:1920}]) {
+    assert.deepEqual(senderProfile('balanced',opts,size),{videoKbps:6000,audioKbps:128,fps:30,scale:1});
+    assert.deepEqual(senderProfile('eco',opts,size),{videoKbps:6000,audioKbps:128,fps:30,scale:1});
+  }
+  // Without the explicit flag the caps still protect the room.
+  assert.equal(senderProfile('balanced',{videoKbps:6000,fps:30},{width:1080,height:1920}).videoKbps,1500);
+  // Local media files are content, not cameras: full requested quality.
+  assert.equal(senderProfile('balanced',{kind:'media',videoKbps:4000,fps:30},{width:1920,height:1080}).videoKbps,4000);
+  assert.equal(senderProfile('eco',{kind:'media',videoKbps:4000,fps:30},{width:1920,height:1080}).scale,1);
+});
 test('host receives early usage warning, countdown and local confirmation without claiming billing cap', () => {
   const st={provider:'cloudflare',warning:false,usageBytes:44000000000,estimatedBytes:94000000000,budgetBytes:900000000000};
   assert.equal(relayMessage(st).warning,false);

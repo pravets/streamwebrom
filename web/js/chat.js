@@ -160,12 +160,13 @@ export function dmPeer(m, myId) {
 /**
  * Unread reducer. state maps conversation key -> count; m is a "chat" or "dm"
  * signalling envelope. A message counts for its conversation unless that
- * conversation is open or the message is my own echo. Pure: returns a new
+ * conversation is open and actually visible (a closed drawer or an inactive
+ * tab never marks it read) or the message is my own echo. Pure: returns a new
  * object and never mutates the input.
  */
-export function unreadAfter(state, m, openKey, myId) {
+export function unreadAfter(state, m, openKey, myId, visible = true) {
   const key = m.type === "dm" ? conversationKey(m.peerId, m.to) : GENERAL;
-  if (key === openKey) return state;
+  if (visible && key === openKey) return state;
   if (myId && m.comment && m.comment.peerId === myId) return state;
   return { ...state, [key]: (state[key] || 0) + 1 };
 }
@@ -183,10 +184,14 @@ export function unreadAfter(state, m, openKey, myId) {
  *   onUnread(total)    badge callback (tab or drawer button)
  *   onMention(c)       optional mention notification
  *   offNote            optional node shown while dms are off
+ *   visible()          is the pane on screen right now? (drawer open / tab
+ *                      active) unread only skips the open conversation when
+ *                      the user can actually see it; defaults to always true
  */
 export function createChat(opts) {
-  const { log, switcher, input, sendButton, send, myId, myName, peers, canDM, policy, actionsFor, onUnread, onMention, offNote } = opts;
+  const { log, switcher, input, sendButton, send, myId, myName, peers, canDM, policy, actionsFor, onUnread, onMention, offNote, visible = () => true } = opts;
   const histories = new Map(); // key -> [comment]
+  const drafts = new Map(); // key -> unsent composer text, kept per conversation
   let openKey = GENERAL;
   let unread = {};
   const total = () => Object.values(unread).reduce((a, b) => a + b, 0);
@@ -203,14 +208,31 @@ export function createChat(opts) {
     n.dataset.cid = c.id;
     return n;
   };
+  // Switching conversations — including the automatic fallback when the
+  // policy changes — must never carry a draft into another conversation:
+  // each one keeps its own unsent text until it is sent or edited away.
+  const setOpen = (key) => {
+    if (input.value) drafts.set(openKey, input.value); else drafts.delete(openKey);
+    openKey = key;
+    input.value = drafts.get(key) || "";
+  };
+  // May I write to this dm right now? The peer must still be in the room and
+  // the page policy (canDM) must allow it; history stays readable regardless.
+  const dmAllowed = (key) => {
+    const peer = peers().find((p) => p.id === peerOf(key));
+    return policy() !== "off" && !!peer && canDM(peer);
+  };
   const composerRow = input.parentElement;
   const composer = mountComposer(composerRow, input, (x) => {
     if (openKey === GENERAL) {
       send(x.sticker ? { type: "chat", kind: "sticker", text: x.sticker } : { type: "chat", text: x.text });
     } else {
+      // Re-check at send time: the policy can change while the user types.
       const to = peerOf(openKey);
-      if (to) send(x.sticker ? { type: "dm", to, kind: "sticker", text: x.sticker } : { type: "dm", to, text: x.text });
+      if (!to || !dmAllowed(openKey)) return;
+      send(x.sticker ? { type: "dm", to, kind: "sticker", text: x.sticker } : { type: "dm", to, text: x.text });
     }
+    drafts.delete(openKey);
   });
   sendButton.onclick = composer.send;
   input.addEventListener("keydown", (e) => e.key === "Enter" && !e.isComposing && composer.send());
@@ -234,7 +256,10 @@ export function createChat(opts) {
   }
   function syncComposer() {
     // "off" disables direct messages only: the general chat keeps working.
-    const off = policy() === "off" && openKey !== GENERAL;
+    // A forbidden (or departed) peer keeps its history readable, but the
+    // composer follows canDM — not just the "off" policy — so a host-only
+    // room never offers a guest-to-guest composer from a saved conversation.
+    const off = openKey !== GENERAL && !dmAllowed(openKey);
     composerRow.classList.toggle("hidden", off);
     if (offNote) offNote.classList.toggle("hidden", !off);
   }
@@ -242,12 +267,12 @@ export function createChat(opts) {
     // A policy change can forbid the open conversation: fall back to general.
     if (openKey !== GENERAL) {
       const other = peers().find((p) => p.id === peerOf(openKey));
-      if (policy() === "off" || (other && !canDM(other))) { openKey = GENERAL; renderLog(); }
+      if (policy() === "off" || (other && !canDM(other))) { setOpen(GENERAL); renderLog(); }
     }
     renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
   }
   function open(key) {
-    openKey = key;
+    setOpen(key);
     delete unread[key];
     renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
   }
@@ -261,7 +286,7 @@ export function createChat(opts) {
     histories.set(key, list);
     const n = node(c, key);
     if (key === openKey) appendChat(log, n);
-    unread = unreadAfter(unread, m, openKey, myId());
+    unread = unreadAfter(unread, m, openKey, myId(), visible());
     renderSwitcher(); if (onUnread) onUnread(total());
     if (n.dataset.mention && c.peerId !== myId() && onMention) onMention(c);
   }
@@ -274,7 +299,8 @@ export function createChat(opts) {
   }
   // welcome/reconnect: the server history is authoritative and replaces ours.
   function seed(chat, dms) {
-    histories.clear(); unread = {}; openKey = GENERAL;
+    setOpen(GENERAL); // the old draft stays with its own conversation
+    histories.clear(); unread = {};
     histories.set(GENERAL, (chat || []).slice(-300));
     for (const c of dms || []) {
       const key = conversationKey(c.peerId, c.to);

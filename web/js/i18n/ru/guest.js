@@ -63,6 +63,7 @@ export const ru = {
   "guest.selfDeafenTitle": "Отключить звук комнаты только для себя; ваш микрофон продолжает работать",
   "guest.selfDeafenedNote": "Вы больше не слышите комнату. Участники по-прежнему слышат вас.",
   "guest.selfUndeafenedNote": "Вы снова слышите комнату",
+  "guest.selfUndeafenedHostNote": "Локальное приглушение снято, но ведущий по-прежнему отключает вам звук комнаты",
   "guest.addCamera": "Добавить другую камеру",
   "guest.cameraNth": "Камера {n}",
   "guest.secondCamera": "камера 2",

@@ -23,6 +23,10 @@ export function immersive(root, button, exit, opts = {}) {
     if (native) try {
       if (root.requestFullscreen) {
         await root.requestFullscreen();
+        // leave() may have cancelled cinema mode while the request was
+        // pending: do not lock orientation for a cancelled entry, and undo
+        // the fullscreen the late request just granted.
+        if (!active) { document.exitFullscreen?.().catch(() => {}); return; }
         // The orientation lock (guest landscape mode) is only legal inside
         // fullscreen, so it runs after the request actually succeeded.
         opts.onFullscreen?.();
