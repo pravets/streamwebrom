@@ -94,9 +94,23 @@ public final class MainActivity extends Activity {
     private static String certPin(SslError error) {
         try {
             SslCertificate cert = error.getCertificate();
-            java.security.cert.X509Certificate x = cert == null ? null : cert.getX509Certificate();
-            if (x == null) return "";
-            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(x.getEncoded());
+            if (cert == null) return "";
+            byte[] der = null;
+            // getX509Certificate() only exists from API 29; older devices use the
+            // serialised state, and the readable form is the last resort. An
+            // unreadable certificate yields no pin, so the user is asked again.
+            if (Build.VERSION.SDK_INT >= 29) {
+                java.security.cert.X509Certificate x = cert.getX509Certificate();
+                if (x != null) der = x.getEncoded();
+            }
+            if (der == null) {
+                android.os.Bundle state = SslCertificate.saveState(cert);
+                der = state == null ? null : state.getByteArray("x509-certificate");
+            }
+            byte[] source = der != null && der.length > 0
+                ? der
+                : String.valueOf(cert).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(source);
             StringBuilder out = new StringBuilder(digest.length * 2);
             for (byte b : digest) out.append(String.format("%02x", b));
             return out.toString();
