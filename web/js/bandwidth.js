@@ -1,4 +1,22 @@
 // Shared sender limits. These do not change the 16:9 compositor/OBS raster.
+
+// Shipped defaults of the device panel. A source that keeps them expressed no
+// preference, so the room bandwidth mode stays in charge of it.
+export const PANEL_DEFAULTS = { quality: "720", fps: "30" };
+
+/**
+ * Did somebody explicitly ask for this quality? URL parameters, the director
+ * panel or the sender's own panel all count; the shipped defaults do not,
+ * otherwise the room mode could never protect a source. `hasParam` is injected
+ * so the rule stays testable without a browser.
+ */
+export function explicitQuality(prefs = {}, hasParam = () => false) {
+  if (hasParam()) return true;
+  const quality = String(prefs.quality ?? PANEL_DEFAULTS.quality);
+  const fps = String(prefs.fps ?? PANEL_DEFAULTS.fps);
+  return quality !== PANEL_DEFAULTS.quality || fps !== PANEL_DEFAULTS.fps;
+}
+
 export function senderProfile(mode, opts = {}, settings = {}) {
   const raw = { videoKbps: opts.videoKbps || 4000, audioKbps: opts.audioKbps || 128, fps: opts.fps || 30, scale: 1 };
   // Explicit per-source tuning (director panel, guest panel, URL params) and

@@ -13,6 +13,7 @@
 //   &landscape=1            lock the phone screen to landscape in fullscreen
 import { $, el, toast, params, api, Signal, publish, subscribe, levelMeter, staleRevision } from "./rtc.js";
 import { listDevices, loadPrefs, savePrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain } from "./devices.js";
+import { explicitQuality } from "./bandwidth.js";
 import { remoteSnapshot, remoteStats, CAMCTL } from "./remote.js";
 import { createChat } from "./chat.js";
 import { automaticRoute } from "./network.js";
@@ -106,9 +107,12 @@ api(`/api/rooms/${encodeURIComponent(room)}`).then((r) => {
 
 let remoteKbps = 0; // set by the host (director) from the studio
 const videoKbps = () => remoteKbps || Number(params.get("bitrate") || params.get("vb")) || kbpsFor(Number(prefs.quality));
-// URL quality/bitrate/fps params are explicit operator intent: they override
-// the room bandwidth mode caps (balanced/eco), like the director panel does.
-const explicitTuning = ["bitrate", "vb", "quality", "height", "h", "fps", "framerate", "fr"].some((n) => params.has(n));
+// URL quality/bitrate/fps params and the guest's own panel choices are
+// explicit intent: they override the room bandwidth mode caps (balanced/eco),
+// exactly like the director panel does. Shipped defaults leave the room mode
+// in charge, so a source that never asked for anything is still protected.
+const TUNING_PARAMS = ["bitrate", "vb", "quality", "height", "h", "fps", "framerate", "fr"];
+const explicitTuning = explicitQuality(prefs, () => TUNING_PARAMS.some((n) => params.has(n)));
 const pubOpts = (name) => ({ kind: "camera", name, videoKbps: videoKbps(), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 96, explicit: explicitTuning });
 
 let meterTimer, noDeviceNotice = false;
