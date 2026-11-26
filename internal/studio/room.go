@@ -584,6 +584,15 @@ func (r *Room) addDMChecked(c Comment) error {
 	if tr == RoleGuest && (t.pass == "" || r.dmPeerByPass[t.pass] != t.ID) {
 		return Userf("dm_target_unavailable", "Ese participante no puede recibir mensajes directos")
 	}
+	// The sender matters for the same reason: a replaced session keeps its
+	// socket for a moment and could still post into the conversation that was
+	// just rebound away from it.
+	if c.Role == RoleGuest {
+		s := r.peers[c.PeerID]
+		if s == nil || s.pass == "" || r.dmPeerByPass[s.pass] != s.ID {
+			return Userf("dm_session_stale", "Tu sesión ya no está activa en esta sala")
+		}
+	}
 	r.appendDMLocked(c)
 	return nil
 }
@@ -685,6 +694,13 @@ const maxPasses = 1000
 func (r *Room) issuePass(p *Peer) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// A replaced session is on its way out: it must neither keep nor be given a
+	// pass, otherwise its late welcome would rebind the pass (and the dm
+	// history) away from the session that just took it over.
+	if p.replaced {
+		p.pass = ""
+		return ""
+	}
 	if p.pass == "" || !r.passes[p.pass] {
 		if len(r.passes) >= maxPasses && !r.persistent {
 			r.passes = map[string]bool{}

@@ -82,7 +82,11 @@ type Peer struct {
 
 	room  *Room
 	pass  string // rejoin pass (guests), guarded by room.mu
-	route string // immutable after join, before publishing the peer into a room
+	// replaced marks a session whose rejoin pass was taken over by a newer
+	// join: it keeps its socket for a moment but must not claim the pass back
+	// (or claim a fresh one) while it is being closed. Guarded by room.mu.
+	replaced bool
+	route    string // immutable after join, before publishing the peer into a room
 	conn  *websocket.Conn
 	out   chan []byte
 	lim   *rate.Limiter

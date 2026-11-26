@@ -583,6 +583,60 @@ func TestDMAndChatConcurrent(t *testing.T) {
 	}
 }
 
+// A replaced session must not reclaim the pass from the session that took it
+// over: otherwise its late welcome would rebind the dm history backwards.
+func TestReplacedSessionCannotReclaimPass(t *testing.T) {
+	_, r, _, g1, _ := dmFixture(t)
+	r.mu.Lock()
+	g1.replaced = true
+	r.mu.Unlock()
+	pass := r.issuePass(g1) // takes r.mu itself
+	r.mu.RLock()
+	owner := r.dmPeerByPass["pass-one"]
+	r.mu.RUnlock()
+	if pass != "" {
+		t.Fatalf("replaced session got a pass: %q", pass)
+	}
+	if owner != "guest-one" {
+		t.Fatalf("pass rebound away from the live session: %q", owner)
+	}
+}
+
+// The same stale-session rule applies to the sender: a replaced guest may not
+// post into the conversation that was just moved away from it.
+func TestDMRejectedForStaleSender(t *testing.T) {
+	_, r, host, g1, _ := dmFixture(t)
+	r.mu.Lock()
+	old := newPeer(nil, nil)
+	old.ID, old.Role, old.room, old.pass = "guest-old", RoleGuest, r, "pass-one"
+	r.dmPeerByPass["pass-one"] = g1.ID // the pass already belongs to the fresh id
+	r.peers[old.ID] = old
+	r.mu.Unlock()
+	if err := r.addDMChecked(Comment{ID: "t1", PeerID: old.ID, Role: RoleGuest, To: host.ID, Text: "lost"}); err == nil || CodeOf(err) != "dm_session_stale" {
+		t.Fatalf("stale sender accepted: %v", err)
+	}
+	if got := r.dmHistory(host.ID); len(got) != 0 {
+		t.Fatalf("stale sender stored a message: %+v", got)
+	}
+}
+
+func TestChatDeleteClearsFeaturedOutsideHistory(t *testing.T) {
+	h, r, host, g1, _ := dmFixture(t)
+	ctx := context.Background()
+	// The comment scrolled out of the ring buffer but is still on screen.
+	if err := r.Update(func(st *State) error { st.Comment = &Comment{ID: "gone-cid", Text: "old"}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	dmDrain(host)
+	dmDrain(g1)
+	if err := h.handle(ctx, host, Msg{Type: "chat-delete", Target: "gone-cid"}); err != nil {
+		t.Fatalf("delete outside history failed: %v", err)
+	}
+	if st := r.Snapshot(); st.Comment != nil {
+		t.Fatalf("featured comment not cleared: %+v", st.Comment)
+	}
+}
+
 func TestChatDeleteKeepsNewerFeaturedComment(t *testing.T) {
 	h, r, host, g1, g2 := dmFixture(t)
 	ctx := context.Background()

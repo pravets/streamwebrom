@@ -571,12 +571,22 @@ func (h *Hub) join(p *Peer, m Msg) error {
 	if probe {
 		limit = 1
 	}
-	if len(r.peers)+len(r.waiting) >= limit {
+	// A rejoin with a valid pass takes over its own previous session, so that
+	// slot is free: a second tab must still be able to steal the pass back.
+	rejoin := role == RoleGuest && m.Rejoin != "" && r.passes[m.Rejoin]
+	replaceable := 0
+	if rejoin {
+		for _, old := range r.peers {
+			if old.pass == m.Rejoin {
+				replaceable++
+			}
+		}
+	}
+	if len(r.peers)+len(r.waiting)-replaceable >= limit {
 		r.mu.Unlock()
 		return errFull
 	}
 	p.room = r
-	rejoin := role == RoleGuest && m.Rejoin != "" && r.passes[m.Rejoin]
 	if rejoin {
 		p.pass = m.Rejoin
 	}
@@ -596,6 +606,9 @@ func (h *Hub) join(p *Peer, m Msg) error {
 	var evicted []*Peer
 	if rejoin {
 		evicted = r.evictPassLocked(m.Rejoin, p.ID)
+		for _, old := range evicted {
+			old.replaced = true
+		}
 	}
 	r.mu.Unlock()
 
@@ -1136,21 +1149,22 @@ func (h *Hub) hostAction(host *Peer, m Msg) error {
 		// Idempotent by design: a double click or a client retry must not turn
 		// into an error modal for the moderator.
 		inChat, pair, ok := r.deleteComment(m.Target)
-		if !ok {
-			return nil
-		}
-		if inChat {
-			r.broadcast(Msg{Type: "chat-deleted", ID: m.Target}, "")
-		} else {
-			for _, id := range pair {
-				if p := h.peerByID(r, id); p != nil {
-					p.Send(Msg{Type: "chat-deleted", ID: m.Target})
+		if ok {
+			if inChat {
+				r.broadcast(Msg{Type: "chat-deleted", ID: m.Target}, "")
+			} else {
+				for _, id := range pair {
+					if p := h.peerByID(r, id); p != nil {
+						p.Send(Msg{Type: "chat-deleted", ID: m.Target})
+					}
 				}
 			}
 		}
 		// A deleted message must not stay featured on the program output; a
-		// newer featured comment set meanwhile must survive. Skip the state
-		// broadcast entirely when this comment was not the featured one.
+		// newer featured comment set meanwhile must survive. The cleanup runs
+		// even when the text already scrolled out of the history ring, where
+		// deleteComment finds nothing to remove. Skip the state broadcast
+		// entirely when this comment was not the featured one.
 		if err := r.Update(func(st *State) error {
 			if st.Comment == nil || st.Comment.ID != m.Target {
 				return errStateUnchanged
