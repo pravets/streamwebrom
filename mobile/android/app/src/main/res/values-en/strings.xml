@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hint_server">https://your-server or invitation link</string>
+    <string name="open">Open</string>
+    <string name="browser">Browser</string>
+    <string name="background">Background</string>
+    <string name="background_on">Background: on</string>
+    <string name="bg_need_room">Open your room before enabling background mode</string>
+    <string name="bg_need_mic">Enable the room microphone and grant the permission before enabling background mode</string>
+    <string name="help">Connect your HTTPS server. Join the room and enable Background to keep audio and connection while using other apps. Android may pause the camera. To share your screen, use a compatible browser.</string>
+    <string name="no_browser">No browser is installed</string>
+    <string name="bad_url">Use an HTTPS URL</string>
+    <string name="bg_failed">Android did not allow background audio. Try again with the room visible.</string>
+    <string name="restart_notice">The room restarted because the app was minimized without Background mode. Enable it to keep audio and connection.</string>
+    <string name="ssl_title">Untrusted certificate</string>
+    <string name="ssl_message">Server %1$s presents an untrusted certificate (e.g. self-signed on your LAN). Continue only if you recognize this server.</string>
+    <string name="ssl_continue">Continue</string>
+    <string name="ssl_cancel">Cancel</string>
+</resources>

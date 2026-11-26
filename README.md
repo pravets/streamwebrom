@@ -60,7 +60,7 @@ o deja `ffmpeg.exe` junto al ejecutable.
 
 **App web instalable (PWA):** abre el estudio en Chrome/Edge y usa *Instalar app*; funciona en PC y móvil igual que VDO.Ninja.
 
-**Android:** la entrega incluye un APK de prueba y otro sin firma para distribución. **iPhone/iPad:** proyecto SwiftUI/WKWebView; la compilación de simulador se hace en Xcode en local, porque CI ya no usa un runner macOS. Un IPA para dispositivos requiere firma Apple. Ambos clientes se conectan a tu servidor HTTPS. Instrucciones y límites en [mobile/README.md](mobile/README.md).
+**Android:** la entrega incluye un APK de prueba instalable y, con los secretos de firma configurados, un APK release firmado e instalable; el artefacto sin firma es para que el propietario lo firme, nunca para instalación directa. **iPhone/iPad:** proyecto SwiftUI/WKWebView; la compilación de simulador se hace en Xcode en local, porque CI ya no usa un runner macOS. Un IPA para dispositivos requiere firma Apple. Ambos clientes se conectan a tu servidor HTTPS. Instrucciones y límites en [mobile/README.md](mobile/README.md).
 
 **Antes de transmitir:** abre `/diagnostics` para revisar navegador, cámara/micrófono, conexión al servidor, ffmpeg y configuración TURN.
 

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hint_server">https://tu-servidor o enlace de invitación</string>
+    <string name="open">Abrir</string>
+    <string name="browser">Navegador</string>
+    <string name="background">Segundo plano</string>
+    <string name="background_on">Segundo plano: activo</string>
+    <string name="bg_need_room">Abre tu sala antes de activar el segundo plano</string>
+    <string name="bg_need_mic">Activa el micrófono de la sala y concede el permiso antes de habilitar el segundo plano</string>
+    <string name="help">Conecta tu servidor HTTPS. Entra a la sala y activa Segundo plano para mantener audio y conexión al usar otras apps. Android puede pausar la cámara. Para compartir pantalla, usa un navegador compatible.</string>
+    <string name="no_browser">No hay un navegador instalado</string>
+    <string name="bad_url">Usa una URL HTTPS</string>
+    <string name="bg_failed">Android no permitió activar el audio en segundo plano. Inténtalo con la sala visible.</string>
+    <string name="restart_notice">La sala se reinició al minimizar sin Segundo plano. Actívalo para mantener audio y conexión.</string>
+    <string name="ssl_title">Certificado no confiable</string>
+    <string name="ssl_message">El servidor %1$s presenta un certificado no confiable (p. ej. autofirmado en tu LAN). Continúa solo si reconoces este servidor.</string>
+    <string name="ssl_continue">Continuar</string>
+    <string name="ssl_cancel">Cancelar</string>
+</resources>

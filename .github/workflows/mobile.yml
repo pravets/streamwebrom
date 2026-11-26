@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -25,12 +27,25 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
+      - name: decode release keystore (optional)
+        if: env.KEYSTORE_B64 != ''
+        run: echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/swr-release.jks"
       - run: gradle -p mobile/android :app:assembleDebug :app:assembleRelease :app:lint
+        env:
+          ORG_GRADLE_PROJECT_SWR_STORE_FILE: ${{ env.KEYSTORE_B64 != '' && format('{0}/swr-release.jks', runner.temp) || '' }}
+          ORG_GRADLE_PROJECT_SWR_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_SWR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_SWR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       - name: package
         run: |
           mkdir -p dist
           cp mobile/android/app/build/outputs/apk/debug/app-debug.apk dist/StreamWebRom-Android-debug.apk
-          cp mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk dist/StreamWebRom-Android-unsigned.apk
+          if [ -f mobile/android/app/build/outputs/apk/release/app-release.apk ]; then
+            cp mobile/android/app/build/outputs/apk/release/app-release.apk dist/StreamWebRom-Android.apk
+          else
+            # Not installable as-is: owners must sign it themselves (see mobile/README).
+            cp mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk dist/StreamWebRom-Android-unsigned.apk
+          fi
           cd dist && sha256sum *.apk > SHA256SUMS-Android.txt
       - uses: actions/upload-artifact@v4
         with:

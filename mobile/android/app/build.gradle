@@ -14,5 +14,30 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    buildTypes { release { minifyEnabled false } }
+    // Release signing is opt-in and all-or-nothing: CI passes the four
+    // properties from repository secrets, a local build may pass none. Reading
+    // a property that is not set would throw MissingPropertyException while
+    // configuring the project, breaking assembleDebug and Gradle sync too.
+    def signingKeys = ['SWR_STORE_FILE', 'SWR_STORE_PASSWORD', 'SWR_KEY_ALIAS', 'SWR_KEY_PASSWORD']
+    def signing = signingKeys.collectEntries { [(it): (project.findProperty(it) ?: '')] }
+    def canSignRelease = signingKeys.every { signing[it] } &&
+        project.file(signing['SWR_STORE_FILE']).exists()
+    signingConfigs {
+        release {
+            if (canSignRelease) {
+                storeFile file(signing['SWR_STORE_FILE'])
+                storePassword signing['SWR_STORE_PASSWORD']
+                keyAlias signing['SWR_KEY_ALIAS']
+                keyPassword signing['SWR_KEY_PASSWORD']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (canSignRelease) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
 }
