@@ -21,7 +21,7 @@ android {
     def signingKeys = ['SWR_STORE_FILE', 'SWR_STORE_PASSWORD', 'SWR_KEY_ALIAS', 'SWR_KEY_PASSWORD']
     def signing = signingKeys.collectEntries { [(it): (project.findProperty(it) ?: '')] }
     def canSignRelease = signingKeys.every { signing[it] } &&
-        new File(signing['SWR_STORE_FILE'] as String).exists()
+        project.file(signing['SWR_STORE_FILE']).exists()
     signingConfigs {
         release {
             if (canSignRelease) {
