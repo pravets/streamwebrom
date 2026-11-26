@@ -555,6 +555,32 @@ func (r *Room) addDM(c Comment) {
 	}
 }
 
+// addDMChecked validates the recipient and stores the dm under a single lock:
+// a reconnect must not rebind history between the check and the append.
+func (r *Room) addDMChecked(c Comment) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t := r.peers[c.To]
+	if t == nil {
+		if r.waiting[c.To] != nil {
+			return Userf("dm_target_unavailable", "that participant cannot receive direct messages")
+		}
+		return errors.New("peer not found")
+	}
+	if tr := t.role(); tr != RoleHost && tr != RoleGuest {
+		return Userf("dm_target_unavailable", "that participant cannot receive direct messages")
+	}
+	if r.dms == nil {
+		r.dms = map[string][]Comment{}
+	}
+	key := dmKey(c.PeerID, c.To)
+	r.dms[key] = append(r.dms[key], c)
+	if len(r.dms[key]) > 200 {
+		r.dms[key] = r.dms[key][len(r.dms[key])-200:]
+	}
+	return nil
+}
+
 // dmHistory returns every conversation this peer takes part in, oldest first.
 func (r *Room) dmHistory(peerID string) []Comment {
 	r.mu.RLock()
@@ -622,10 +648,14 @@ func (r *Room) rebindDMLocked(oldID, newID string) {
 			}
 		}
 		nk := dmKey(a, b)
-		r.dms[nk] = append(r.dms[nk], msgs...)
-		if len(r.dms[nk]) > 200 {
-			r.dms[nk] = r.dms[nk][len(r.dms[nk])-200:]
+		merged := append(r.dms[nk], msgs...)
+		// Chronological merge: the cap must drop the oldest messages, never
+		// one that arrived on the new id before the rebind.
+		slices.SortStableFunc(merged, func(x, y Comment) int { return cmp.Compare(x.TS, y.TS) })
+		if len(merged) > 200 {
+			merged = merged[len(merged)-200:]
 		}
+		r.dms[nk] = merged
 	}
 }
 

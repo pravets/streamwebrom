@@ -415,3 +415,78 @@ func TestDMHistoryCap200(t *testing.T) {
 		t.Fatalf("cap dropped the wrong end: %s .. %s", hist[0].Text, hist[199].Text)
 	}
 }
+
+func TestDMCheckedRecipientAtomic(t *testing.T) {
+	_, r, host, g1, _ := dmFixture(t)
+	if err := r.addDMChecked(Comment{ID: "x1", PeerID: host.ID, To: "ghost", Text: "hi"}); err == nil {
+		t.Fatal("expected peer not found")
+	}
+	waiting := newPeer(nil, nil)
+	waiting.ID, waiting.Role, waiting.room = "wait", RoleGuest, r
+	r.waiting[waiting.ID] = waiting
+	if err := r.addDMChecked(Comment{ID: "x2", PeerID: host.ID, To: waiting.ID, Text: "hi"}); err == nil || !strings.Contains(err.Error(), "cannot receive") {
+		t.Fatalf("expected dm_target_unavailable, got %v", err)
+	}
+	if err := r.addDMChecked(Comment{ID: "x3", PeerID: host.ID, To: g1.ID, Text: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.dmHistory(g1.ID); len(got) != 1 || got[0].ID != "x3" {
+		t.Fatalf("history: %+v", got)
+	}
+}
+
+func TestRebindKeepsMessagesArrivedBeforeRebind(t *testing.T) {
+	_, r, host, g1, _ := dmFixture(t)
+	for i := 0; i < 200; i++ {
+		r.addDM(Comment{ID: fmt.Sprintf("old%d", i), PeerID: host.ID, To: "old-g1", Text: "o", TS: int64(100 + i)})
+	}
+	// Arrives on the fresh id before the reconnect rebinds the history.
+	r.addDM(Comment{ID: "new", PeerID: host.ID, To: g1.ID, Text: "n", TS: 900})
+	r.mu.Lock()
+	r.rebindDMLocked("old-g1", g1.ID)
+	r.mu.Unlock()
+	hist := r.dmHistory(g1.ID)
+	if len(hist) != 200 {
+		t.Fatalf("len %d, want 200", len(hist))
+	}
+	if hist[len(hist)-1].ID != "new" {
+		t.Fatalf("new message dropped by cap: %+v", hist[len(hist)-1])
+	}
+	if hist[0].ID != "old1" {
+		t.Fatalf("oldest should be dropped first, got %s", hist[0].ID)
+	}
+}
+
+func TestChatDeleteKeepsNewerFeaturedComment(t *testing.T) {
+	h, r, host, g1, g2 := dmFixture(t)
+	ctx := context.Background()
+	if err := h.handle(ctx, g1, Msg{Type: "chat", Text: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	var first string
+	for _, p := range []*Peer{host, g1, g2} {
+		first = dmRead(t, p).Comment.ID
+	}
+	if err := h.handle(ctx, g1, Msg{Type: "chat", Text: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	var second string
+	for _, p := range []*Peer{host, g1, g2} {
+		second = dmRead(t, p).Comment.ID
+	}
+	dmDrain(host)
+	dmDrain(g1)
+	dmDrain(g2)
+	if err := r.Update(func(st *State) error { st.Comment = &Comment{ID: second, Text: "second"}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	dmDrain(host)
+	dmDrain(g1)
+	dmDrain(g2)
+	if err := h.handle(ctx, host, Msg{Type: "chat-delete", Target: first}); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.Snapshot(); st.Comment == nil || st.Comment.ID != second {
+		t.Fatalf("newer featured comment cleared: %+v", st.Comment)
+	}
+}

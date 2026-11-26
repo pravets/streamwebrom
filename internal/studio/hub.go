@@ -98,6 +98,10 @@ func NewHub(ctx context.Context, o Options) *Hub {
 
 var roomIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,47}$`)
 
+// errStateUnchanged aborts a Room.Update without publishing a new state: a
+// no-op edit must not broadcast anything to the room.
+var errStateUnchanged = errors.New("state unchanged")
+
 // RefreshRoutes reconnects browsers so active sessions leave an exhausted
 // provider, while preserving stage slots for the normal rejoin grace period.
 func (h *Hub) RefreshRoutes() {
@@ -502,14 +506,7 @@ func (h *Hub) dm(p *Peer, m Msg) error {
 	if m.To == "" || m.To == p.ID {
 		return errors.New("invalid dm target")
 	}
-	target := h.peerByID(r, m.To)
-	if target == nil {
-		return errors.New("peer not found")
-	}
-	if tr := target.role(); tr != RoleHost && tr != RoleGuest {
-		return Userf("dm_target_unavailable", "that participant cannot receive direct messages")
-	}
-	c := Comment{ID: token(8), From: p.Name, Source: "dm", TS: time.Now().UnixMilli(), PeerID: p.ID, Role: role, To: target.ID}
+	c := Comment{ID: token(8), From: p.Name, Source: "dm", TS: time.Now().UnixMilli(), PeerID: p.ID, Role: role, To: m.To}
 	if m.Kind == "sticker" {
 		if !validSticker(m.Text) {
 			return errors.New("unknown sticker")
@@ -521,9 +518,15 @@ func (h *Hub) dm(p *Peer, m Msg) error {
 			return nil
 		}
 	}
-	r.addDM(c)
-	out := Msg{Type: "dm", Comment: &c, PeerID: p.ID, To: target.ID}
-	target.Send(out)
+	// Recipient check and history append share one lock: a reconnect between
+	// them would rebind the conversation and hide this message from history.
+	if err := r.addDMChecked(c); err != nil {
+		return err
+	}
+	out := Msg{Type: "dm", Comment: &c, PeerID: p.ID, To: c.To}
+	if target := h.peerByID(r, m.To); target != nil {
+		target.Send(out)
+	}
 	p.Send(out) // echo for the sender's UI
 	return nil
 }
@@ -1137,10 +1140,16 @@ func (h *Hub) hostAction(host *Peer, m Msg) error {
 				}
 			}
 		}
-		// A deleted message must not stay featured on the program output.
-		if st := r.Snapshot(); st.Comment != nil && st.Comment.ID == m.Target {
-			_ = r.Update(func(st *State) error { st.Comment = nil; return nil })
-		}
+		// A deleted message must not stay featured on the program output; a
+		// newer featured comment set meanwhile must survive. Skip the state
+		// broadcast entirely when this comment was not the featured one.
+		_ = r.Update(func(st *State) error {
+			if st.Comment == nil || st.Comment.ID != m.Target {
+				return errStateUnchanged
+			}
+			st.Comment = nil
+			return nil
+		})
 		return nil
 	case "state":
 		return h.setState(r, m)
