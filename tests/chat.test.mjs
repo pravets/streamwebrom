@@ -4,7 +4,7 @@ import { moduleURL } from './module-url.mjs';
 
 // chat.js imports rtc.js, which reads location at module scope.
 globalThis.location = { search: '', hash: '' };
-const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow } = await import(await moduleURL('chat.js'));
+const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow, messageKey, unreadAfterSeed } = await import(await moduleURL('chat.js'));
 
 test('conversationKey is the sorted pair, symmetric and never the general key', () => {
   assert.equal(conversationKey('bob', 'ana'), conversationKey('ana', 'bob'));
@@ -92,4 +92,30 @@ test('a hidden panel never marks the open conversation as read', () => {
   assert.deepEqual(unreadAfter({}, chat, GENERAL, 'me'), {}, 'visibility defaults to true');
   const echo = { type: 'dm', peerId: 'me', to: 'ana', comment: { peerId: 'me', text: 'hi' } };
   assert.deepEqual(unreadAfter({}, echo, GENERAL, 'me', false), {}, 'own echo never badges, hidden or not');
+});
+
+test('messageKey maps an envelope to its conversation in one place', () => {
+  assert.equal(messageKey({ type: 'chat', peerId: 'ana' }), GENERAL);
+  assert.equal(messageKey({ type: 'dm', peerId: 'ana', to: 'me' }), conversationKey('ana', 'me'));
+  assert.equal(messageKey({ type: 'dm', peerId: 'me', to: 'ana' }), conversationKey('ana', 'me'));
+});
+
+test('unread survives a reconnect seed without resurrecting old history', () => {
+  const seen = new Map([[GENERAL, 'c1'], ['ana|me', 'd1']]);
+  const histories = new Map([
+    [GENERAL, [{ id: 'c1', peerId: 'ana' }, { id: 'c2', peerId: 'ana' }, { id: 'c3', peerId: 'me' }]],
+    ['ana|me', [{ id: 'd1', peerId: 'ana' }]],
+    ['bob|me', [{ id: 'e1', peerId: 'bob' }]],
+  ]);
+  // New messages after the last seen one badge; my own message never counts.
+  assert.deepEqual(unreadAfterSeed(histories, seen, 'me'), { [GENERAL]: 1 });
+  // The open, visible conversation is read at once; a hidden pane keeps it.
+  assert.deepEqual(unreadAfterSeed(histories, seen, 'me', GENERAL), {});
+  assert.deepEqual(unreadAfterSeed(histories, seen, 'me', GENERAL, false), { [GENERAL]: 1 });
+  // No known read point (first welcome / dm never opened): nothing is "new".
+  assert.deepEqual(unreadAfterSeed(histories, new Map(), 'me'), {});
+  // A read marker trimmed out of the 300-message window counts from the start.
+  assert.deepEqual(unreadAfterSeed(new Map([[GENERAL, [{ id: 'x2', peerId: 'ana' }]]]), seen, 'me'), { [GENERAL]: 1 });
+  // Pure: the inputs are not mutated.
+  assert.equal(seen.get(GENERAL), 'c1');
 });

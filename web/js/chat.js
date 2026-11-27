@@ -3,7 +3,7 @@
 // recents) and stickers. Also the conversation layer: the room-wide "General"
 // chat plus one direct conversation per peer, with unread badges.
 import { el } from "./rtc.js";
-import { t } from "./i18n.js";
+import { t, onLangChange } from "./i18n.js";
 import { STICKERS, stickerById } from "./stickers.js";
 
 // Category names are i18n keys, resolved when the picker renders so a language
@@ -157,6 +157,11 @@ export function dmPeer(m, myId) {
   return m.peerId === myId ? m.to : m.peerId;
 }
 
+/** Conversation key of a "chat" or "dm" signalling envelope. */
+export function messageKey(m) {
+  return m.type === "dm" ? conversationKey(m.peerId, m.to) : GENERAL;
+}
+
 /**
  * Unread reducer. state maps conversation key -> count; m is a "chat" or "dm"
  * signalling envelope. A message counts for its conversation unless that
@@ -165,10 +170,34 @@ export function dmPeer(m, myId) {
  * object and never mutates the input.
  */
 export function unreadAfter(state, m, openKey, myId, visible = true) {
-  const key = m.type === "dm" ? conversationKey(m.peerId, m.to) : GENERAL;
+  const key = messageKey(m);
   if (visible && key === openKey) return state;
   if (myId && m.comment && m.comment.peerId === myId) return state;
   return { ...state, [key]: (state[key] || 0) + 1 };
+}
+
+/**
+ * Unread counters to rebuild after a reconnect, when the server history
+ * replaces the local one. `seen` maps conversation key -> id of the last
+ * message the user actually looked at: everything newer is unread, my own
+ * messages never count, and the open visible conversation is read at once.
+ * A conversation with no known read point (the first welcome of this page,
+ * or a dm never opened) is not badged, so the whole history cannot show up as
+ * new. If the read marker was already trimmed out of the 300-message window,
+ * the retained history counts as unread — there is no server-side read state.
+ * Pure: returns a new object.
+ */
+export function unreadAfterSeed(histories, seen, myId, openKey, visible = true) {
+  const out = {};
+  for (const [key, list] of histories) {
+    if (!seen.has(key)) continue;
+    const at = list.findIndex((c) => c.id && c.id === seen.get(key));
+    const fresh = (at < 0 ? list : list.slice(at + 1)).filter((c) => !(myId && c.peerId === myId));
+    if (!fresh.length) continue;
+    if (visible && key === openKey) continue;
+    out[key] = fresh.length;
+  }
+  return out;
 }
 
 /**
@@ -205,10 +234,15 @@ export function createChat(opts) {
   const { log, switcher, input, sendButton, send, myId, myName, peers, canDM, policy, actionsFor, onUnread, onMention, offNote, visible = () => true } = opts;
   const histories = new Map(); // key -> [comment]
   const drafts = new Map(); // key -> unsent composer text, kept per conversation
+  const lastSeen = new Map(); // key -> id of the last message the user actually saw
   let openKey = GENERAL;
   let unread = {};
   const total = () => Object.values(unread).reduce((a, b) => a + b, 0);
-  const keyOf = (m) => (m.type === "dm" ? conversationKey(m.peerId, m.to) : GENERAL);
+  const markSeen = (key) => {
+    const list = histories.get(key);
+    const last = list && list[list.length - 1];
+    if (last && last.id) lastSeen.set(key, last.id);
+  };
   const peerOf = (key) => key.split("|").find((id) => id !== myId()) || "";
   const nameOf = (id) => {
     const p = peers().find((x) => x.id === id);
@@ -294,12 +328,13 @@ export function createChat(opts) {
   function open(key) {
     setOpen(key);
     unread = unreadOnShow(unread, key);
+    if (visible()) markSeen(key);
     renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
   }
   function receive(m) {
     const c = m.comment;
     if (!c) return;
-    const key = keyOf(m);
+    const key = messageKey(m);
     const list = histories.get(key) || [];
     list.push(c);
     if (list.length > 300) list.splice(0, list.length - 300);
@@ -307,6 +342,7 @@ export function createChat(opts) {
     const n = node(c, key);
     if (key === openKey) appendChat(log, n);
     unread = unreadAfter(unread, m, openKey, myId(), visible());
+    if (key === openKey && visible()) markSeen(key);
     renderSwitcher(); if (onUnread) onUnread(total());
     if (n.dataset.mention && c.peerId !== myId() && onMention) onMention(c);
   }
@@ -318,9 +354,11 @@ export function createChat(opts) {
     log.querySelector(`[data-cid="${CSS.escape(id)}"]`)?.remove();
   }
   // welcome/reconnect: the server history is authoritative and replaces ours.
+  // Unread counters are rebuilt from what the user had already seen, so a
+  // reconnect neither loses them nor turns the whole history into "new".
   function seed(chat, dms) {
     setOpen(GENERAL); // the old draft stays with its own conversation
-    histories.clear(); unread = {};
+    histories.clear();
     histories.set(GENERAL, (chat || []).slice(-300));
     for (const c of dms || []) {
       const key = conversationKey(c.peerId, c.to);
@@ -328,8 +366,12 @@ export function createChat(opts) {
       list.push(c);
       histories.set(key, list);
     }
-    renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(0);
+    unread = unreadAfterSeed(histories, lastSeen, myId(), openKey, visible());
+    renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
   }
+  // The switcher is rebuilt from scratch, so a language change relabels the
+  // General tab and the dm names without touching the message log.
+  onLangChange(() => renderSwitcher());
   renderSwitcher(); syncComposer();
   return { seed, receive, remove, open, refresh, focus: () => open(openKey), openDM: (peerId) => open(conversationKey(myId(), peerId)), unreadTotal: total };
 }
