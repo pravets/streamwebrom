@@ -187,7 +187,15 @@ with sync_playwright() as pw:
     # Switching language relabels the labels this module builds itself: the
     # conversation switcher and the dm button on the tiles. Inside the call the
     # prejoin picker is hidden, so switch through the same module API it calls.
-    guest.evaluate("async () => { const m = await import('/js/i18n.js'); m.setLang('ru'); }")
+    # The app is served under a hashed asset prefix (/assets/<hash>/js/...), so
+    # the module URL must be resolved from the page's own script: importing a
+    # bare /js/i18n.js would load a second copy whose state nobody renders.
+    guest.evaluate("""async () => {
+        const src = [...document.querySelectorAll('script[type=module]')]
+            .map((s) => s.src).find((u) => /guest\\.js$/.test(u));
+        const mod = await import(new URL('./i18n.js', src).href);
+        mod.setLang('ru');
+    }""")
     expect(guest.locator('#chatBtn')).to_have_attribute('title', 'Чат')
     guest.locator('#chatBtn').click()
     expect(guest.locator('#chatConvos button').first).to_contain_text('Общий')
