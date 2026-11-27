@@ -517,10 +517,10 @@ function addTile(id, stream, name, mine, level, kind = "camera", owner = "") {
   v.play().catch(() => {});
   const audio = mine ? null : roomAudio.add(id, stream); if (audio) audio.muted = effectiveDeafen(deafened, selfDeafened);
   if (audio) applySink(audio, prefs.speaker);
-  const vol = mine ? null : el("input", { type: "range", min: 0, max: 1, step: 0.05, value: 1, title: t("guest.volumeTitle"), class: "tilevol", oninput: (e) => { if (audio) audio.volume = Number(e.target.value); } });
-  const dmBtn = mine || !owner ? null : el("button", { class: "small tile-dm" + (canDM(peers.get(owner)) ? "" : " hidden"), type: "button", style: "position:absolute;top:6px;left:6px;z-index:2", title: t("misc.chatDmTo"), "aria-label": t("misc.chatDmTo"), text: "✉", onclick: () => openGuestDM(owner) });
+  const vol = mine ? null : el("input", { type: "range", min: 0, max: 1, step: 0.05, value: 1, title: t("guest.volumeTitle"), "data-i18n-title": "guest.volumeTitle", class: "tilevol", oninput: (e) => { if (audio) audio.volume = Number(e.target.value); } });
+  const dmBtn = mine || !owner ? null : el("button", { class: "small tile-dm" + (canDM(peers.get(owner)) ? "" : " hidden"), type: "button", style: "position:absolute;top:6px;left:6px;z-index:2", title: t("misc.chatDmTo"), "aria-label": t("misc.chatDmTo"), "data-i18n-title": "misc.chatDmTo", "data-i18n-aria": "misc.chatDmTo", text: "✉", onclick: () => openGuestDM(owner) });
   const tile = el("div", { class: "tile", "data-id": id, "data-name": name, "data-kind": kind, "data-peer": mine ? myId : owner }, v,
-    el("span", { class: "tile-latency", title: t("guest.rttTitle"), text: t("guest.rttValue") }),
+    el("span", { class: "tile-latency", title: t("guest.rttTitle"), "data-i18n-title": "guest.rttTitle", text: t("guest.rttValue") }),
     el("button", { class: "tile-focus", type: "button", "aria-label": t("guest.focusAria", { name }), "aria-pressed": "false" }),
     el("span", { class: "name", text: name }), vol, dmBtn);
   $("#grid").append(tile); updateHiddenCameras(); telemetry.refresh();
@@ -532,6 +532,9 @@ function updateHiddenCameras() {
   for (const tile of document.querySelectorAll("#grid .tile")) {
     const id = tile.dataset.id === "me" ? pub?.id : tile.dataset.id;
     tile.classList.toggle("video-hidden", !!state.hidden?.[id]);
+    // Media sources letterbox by default; the host can switch each one to
+    // cover, and the guest preview must match the program (same shared state).
+    tile.classList.toggle("fit-cover", tile.dataset.kind === "media" && state.fit?.[id] === "cover");
   }
 }
 function updateStageBadge() {
