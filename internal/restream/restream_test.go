@@ -32,6 +32,7 @@ func TestReservedRTPPorts(t *testing.T) {
 
 func TestStatsNeverExposeDestinationKeys(t *testing.T) {
 	s := &Session{}
+	s.status.Live = true
 	s.readStats(strings.NewReader("[tee] Unable to open rtmp://example/live/secret-key\nfps=30\nbitrate=4000k\nout_time=00:00:05\nprogress=continue\n"))
 	status := s.Status()
 	if strings.Contains(status.LastError, "secret-key") || status.Stats != "30 fps · 4000k · 00:00:05" {
@@ -76,6 +77,7 @@ func TestReadStatsClearsStaleErrorWhenProgressResumes(t *testing.T) {
 func TestReadStatsLogsScrubbedCause(t *testing.T) {
 	var buf bytes.Buffer
 	s := &Session{log: slog.New(slog.NewTextHandler(&buf, nil)), stream: "program"}
+	s.status.Live = true
 	s.readStats(strings.NewReader("[tee] Unable to open rtmp://example/live/secret-key\n"))
 	st := s.Status()
 	if st.LastError == "" || strings.Contains(st.LastError, "secret-key") {
@@ -93,6 +95,7 @@ func TestReadStatsLogsScrubbedCause(t *testing.T) {
 func TestDiagnosticsWithEqualsAreLogged(t *testing.T) {
 	var buf bytes.Buffer
 	s := &Session{log: slog.New(slog.NewTextHandler(&buf, nil)), stream: "program"}
+	s.status.Live = true
 	s.readStats(strings.NewReader(
 		"[tee] Unable to open srt://example:9000?streamid=abc&passphrase=topsecret: Connection refused\n" +
 			"[f=flv:onfail=ignore] muxer failed\n"))
@@ -127,15 +130,65 @@ func TestProgressKeysAreNotDiagnostics(t *testing.T) {
 	}
 }
 
-// After cmd.Wait recorded the exit error, a progress line already in flight
-// must not wipe it: the studio would show a dead session with no reason.
+// After cmd.Wait recorded the exit error, lines already in flight must not
+// wipe it: neither a progress line nor a late diagnostic may replace the
+// specific "exit status 251" with a generic message.
 func TestFinishedSessionKeepsExitError(t *testing.T) {
 	s := &Session{log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), stream: "program"}
 	s.status.Live = false
 	s.status.LastError = "exit status 251"
-	s.readStats(strings.NewReader("fps=14\nbitrate=N/A\nout_time=00:00:06\nprogress=continue\n"))
+	s.readStats(strings.NewReader(
+		"[tee] Slave muxer #0 failed: Connection refused, continuing with 1/2 slaves.\n" +
+			"fps=14\nbitrate=N/A\nout_time=00:00:06\nprogress=continue\n"))
 	if got := s.Status().LastError; got != "exit status 251" {
-		t.Fatalf("exit error erased by a late progress line: %q", got)
+		t.Fatalf("exit error erased by a late line: %q", got)
+	}
+}
+
+// A tee destination that failed to open is excluded for the whole session
+// (onfail=ignore), so progress=continue must not clear its indicator.
+func TestDestinationFailureSurvivesProgressContinue(t *testing.T) {
+	cases := []struct{ name, diag string }{
+		{"url in diagnostic", "[tee @ 0x1] Slave '[f=flv:onfail=ignore]rtmp://a.example/live/secret-key': error opening: Connection refused\n"},
+		{"no url in diagnostic", "[tee @ 0x1] Slave muxer #0 failed: Connection refused, continuing with 1/2 slaves.\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := &Session{log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), stream: "program"}
+			s.status.Live = true
+			s.readStats(strings.NewReader(c.diag +
+				"fps=30\nbitrate=4000k\nout_time=00:00:05\nprogress=continue\n"))
+			if st := s.Status(); st.LastError == "" {
+				t.Fatal("failed destination indicator cleared by progress=continue")
+			}
+		})
+	}
+}
+
+func TestDestinationFailureClassifier(t *testing.T) {
+	failures := []string{
+		"[tee @ 0x2] Slave '[f=flv:onfail=ignore]rtmp://a.example/live/key': error opening: Error number -138 occurred",
+		"[rtmp @ 0x3] Cannot open connection tcp://127.0.0.1:9?tcp_nodelay=0",
+		"[tee @ 0x2] Slave muxer #0 failed: Error number -138 occurred, continuing with 1/2 slaves.",
+		"[tee @ 0x2] All tee outputs failed.",
+		"[tee] Unable to open srt://host:9000?streamid=abc: Connection refused",
+	}
+	for _, line := range failures {
+		if !destinationFailure(line) {
+			t.Errorf("failure not classified: %q", line)
+		}
+	}
+	transient := []string{
+		"[h264 @ 0x4] Non-monotonous DTS in output stream 0:1",
+		"[h264 @ 0x4] missing picture in access unit with size 4",
+		"[flv @ 0x4] Packet corrupt (stream = 0, dts = 51000)",
+		"[tcp @ 0x3] Connection to tcp://127.0.0.1:9?tcp_nodelay=0 failed: Error number -138 occurred",
+		"[AVIOContext @ 0x5] Statistics: 123 bytes written, 0 seeks",
+	}
+	for _, line := range transient {
+		if destinationFailure(line) {
+			t.Errorf("transient warning misclassified as destination failure: %q", line)
+		}
 	}
 }
 

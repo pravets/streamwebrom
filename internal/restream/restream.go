@@ -83,9 +83,10 @@ type Session struct {
 	status  Status
 	conns   []*net.UDPConn
 	removes []func()
-	log     *slog.Logger
-	stream  string
-	targets []string
+	log        *slog.Logger
+	stream     string
+	targets    []string
+	destFailed bool // a tee destination failed to open and will not recover
 }
 
 // Status returns a snapshot.
@@ -340,7 +341,12 @@ func (s *Session) readStats(r io.Reader) {
 			// scrubbed and show the studio a generic indicator.
 			log.Info("ffmpeg stderr", "stream", s.stream, "line", scrubSecrets(line))
 			s.mu.Lock()
-			s.status.LastError = "ffmpeg reported an error; check the destination and connection"
+			if s.status.Live {
+				// A line still in the pipe after cmd.Wait must not overwrite
+				// the exit status with a generic message.
+				s.status.LastError = "ffmpeg reported an error; check the destination and connection"
+				s.destFailed = s.destFailed || destinationFailure(line)
+			}
 			s.mu.Unlock()
 			continue
 		}
@@ -353,9 +359,10 @@ func (s *Session) readStats(r io.Reader) {
 		if k == "progress" {
 			s.mu.Lock()
 			s.status.Stats = fmt.Sprintf("%s fps · %s · %s", stats["fps"], stats["bitrate"], stats["out_time"])
-			// Only a live session self-heals: once cmd.Wait recorded a real
-			// exit error, a progress line already in flight must not erase it.
-			if v == "continue" && s.status.Live {
+			// Only a live session with every destination still up self-heals:
+			// once cmd.Wait recorded a real exit error, or tee excluded a
+			// destination, a progress line must not erase the indicator.
+			if v == "continue" && s.status.Live && !s.destFailed {
 				s.status.LastError = ""
 			}
 			s.mu.Unlock()
@@ -375,6 +382,29 @@ var (
 func scrubSecrets(line string) string {
 	line = secretURL.ReplaceAllString(line, "$1://***")
 	return secretKV.ReplaceAllString(line, "$1=***")
+}
+
+// destinationFailure reports whether a diagnostic line describes a tee
+// destination that failed to open. onfail=ignore keeps the rest of the session
+// alive and tee does not reconnect the excluded slave, so such a failure never
+// recovers on its own: its indicator must stick for the whole session. A
+// warning such as a non-monotonic DTS matches neither the phrases nor a
+// destination URL and stays transient.
+func destinationFailure(line string) bool {
+	if secretURL.MatchString(line) {
+		return true
+	}
+	for _, phrase := range []string{
+		"Unable to open",
+		"Cannot open connection",
+		"Slave muxer",
+		"All tee outputs failed",
+	} {
+		if strings.Contains(line, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func trim(s string, n int) string {
