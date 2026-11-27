@@ -212,7 +212,8 @@ func leb128(b []byte) (uint64, int, bool) {
 			return v, i + 1, true
 		}
 	}
-	return v, 8, true
+	// Eight bytes each with the continuation bit set: malformed size field.
+	return 0, 0, false
 }
 
 // vp9Size reads the size from a VP9 keyframe's uncompressed header (profiles
@@ -267,6 +268,10 @@ func vp9Size(b []byte) (uint16, uint16, bool) {
 // header (OBU type 1), which carries max_frame_width/height. The size is those
 // maxima plus one. ok=false when no sequence header is present or it is
 // malformed, so the caller keeps scanning.
+//
+// This is the declared maximum, not necessarily the coded frame size: a stream
+// that uses frame_size_override reports a size at or above the real one. That
+// beats the writer's fixed 640x480, and ffprobe still wins whenever it exists.
 func av1Size(b []byte) (uint16, uint16, bool) {
 	for pos := 0; pos < len(b); {
 		hdr := b[pos]

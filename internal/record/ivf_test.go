@@ -515,3 +515,18 @@ func TestSizeParsersTruncatedNoPanic(t *testing.T) {
 		}
 	}
 }
+
+func TestLEB128RejectsOverlongEncoding(t *testing.T) {
+	// Nine bytes where the first eight all carry the continuation bit: the AV1
+	// OBU size field is malformed and must be rejected, not silently accepted.
+	bad := []byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01}
+	if _, _, ok := leb128(bad); ok {
+		t.Fatal("leb128 accepted eight continuation bytes")
+	}
+	if v, n, ok := leb128([]byte{0x85, 0x01}); !ok || v != 133 || n != 2 {
+		t.Fatalf("leb128(0x85,0x01) = %d, %d, %v; want 133, 2, true", v, n, ok)
+	}
+	if _, _, ok := leb128(nil); ok {
+		t.Fatal("leb128(nil) must not succeed")
+	}
+}
