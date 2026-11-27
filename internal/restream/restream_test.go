@@ -45,6 +45,12 @@ func TestScrubSecrets(t *testing.T) {
 		{"rtmps://b.example/app/key?password=hunter2 failed", "rtmps://*** failed"},
 		{"srt://c.example:9000?streamid=abc&passphrase=xyz", "srt://***"},
 		{"Output url key=abc123 rejected", "Output url key=*** rejected"},
+		// srt credentials are as sensitive as RTMP keys. A URL containing a
+		// space cannot reach ffmpeg at all: Validate rejects it (see
+		// TestDestinationValidate), so the scrubber only has to handle the
+		// token form here.
+		{"srt://x?passphrase=topsecret", "srt://***"},
+		{"passphrase=topsecret streamid=sid1", "passphrase=*** streamid=***"},
 		{"Non-monotonous DTS in output stream 0:1", "Non-monotonous DTS in output stream 0:1"},
 	}
 	for _, c := range cases {
@@ -135,7 +141,9 @@ func TestFinishedSessionKeepsExitError(t *testing.T) {
 
 func TestDestinationValidate(t *testing.T) {
 	ok := []string{"rtmp://a.rtmp.youtube.com/live2/abcd", "rtmps://live-api-s.facebook.com:443/rtmp/k", "srt://host:9000?streamid=x"}
-	bad := []string{"file:///etc/passwd", "concat:a|b", "rtmp://", "http://x/y", "rtmp://h/app/key|[f=flv]file.flv", "pipe:1"}
+	bad := []string{"file:///etc/passwd", "concat:a|b", "rtmp://", "http://x/y", "rtmp://h/app/key|[f=flv]file.flv", "pipe:1",
+		// Whitespace and quotes would split the URL inside ffmpeg diagnostics.
+		"srt://h:9000?passphrase=correct horse battery staple", "rtmp://h/app/key \"quoted\""}
 	for _, u := range ok {
 		if err := (Destination{Name: "x", URL: u}).Validate(); err != nil {
 			t.Errorf("%s should be valid: %v", u, err)

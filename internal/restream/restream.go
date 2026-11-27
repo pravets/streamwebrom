@@ -50,7 +50,9 @@ func (d Destination) Validate() error {
 	if u.Host == "" {
 		return fmt.Errorf("destination %q: missing host", d.Name)
 	}
-	if strings.ContainsAny(d.URL, "|[]\n\r\\'\x00") || len(d.URL) > 4096 || len(d.Name) > 100 {
+	// Whitespace and quotes would split the URL inside ffmpeg's diagnostics,
+	// leaving the tail (often the stream key) unmasked by the scrubber.
+	if strings.ContainsAny(d.URL, "|[]\n\r\t\\'\"\x00 ") || len(d.URL) > 4096 || len(d.Name) > 100 {
 		return fmt.Errorf("destination %q: invalid characters", d.Name)
 	}
 	return nil
@@ -365,7 +367,7 @@ func (s *Session) readStats(r io.Reader) {
 // matches key/password style parameters inside ffmpeg diagnostics.
 var (
 	secretURL = regexp.MustCompile(`(?i)\b(rtmps?|srt|rtsp|https?)://[^\s"'|]+`)
-	secretKV  = regexp.MustCompile(`(?i)\b(key|streamkey|stream_key|password|passwd|secret|token|auth)=([^\s&"'|]+)`)
+	secretKV  = regexp.MustCompile(`(?i)\b(key|streamkey|stream_key|streamid|password|passwd|passphrase|secret|token|auth|signature)=([^\s&"'|]+)`)
 )
 
 // scrubSecrets replaces destination URLs and credential parameters with ***
