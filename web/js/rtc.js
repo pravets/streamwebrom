@@ -64,12 +64,17 @@ export function writeStored(key, value, session = false) {
   catch { return false; }
 }
 
-export async function api(path, body) {
+export async function api(path, body, headers) {
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 20000);
   try {
-    const r = await fetch(path, { ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}), signal: controller.signal });
+    const r = await fetch(path, { ...(body ? { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) } : {}), signal: controller.signal });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (!r.ok) {
+      // Keep the stable server code so callers can react to it by name.
+      const err = new Error(data.error || r.statusText);
+      if (data.code) err.code = data.code;
+      throw err;
+    }
     return data;
   } finally { clearTimeout(timer); }
 }

@@ -27,6 +27,7 @@
       <div><label for="room">ID de sala (opcional)</label><input id="room" placeholder="se genera automáticamente" maxlength="48" pattern="[a-z0-9_-]+"></div>
       <div><label for="pw">Contraseña para invitados (opcional)</label><input id="pw" type="password" maxlength="128" autocomplete="new-password"></div>
       <label class="row"><input id="lobby" type="checkbox"> Sala de espera: aprobar a cada invitado</label>
+      <div id="accessCodeRow" class="hidden"><label for="createToken">Código de acceso del servidor</label><input id="createToken" type="password" maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false"><p class="muted">Este servidor lo pide para crear salas. Solo se guarda en esta pestaña.</p></div>
       <button class="primary" id="create">Crear estudio</button>
       <button class="hidden" id="install">⬇ Instalar como app</button>
       <hr style="border:0;border-top:1px solid var(--line);width:100%">

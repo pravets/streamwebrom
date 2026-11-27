@@ -136,7 +136,22 @@ Cada opción es flag o variable de entorno `SWR_<NOMBRE>` (p. ej. `-udp-port` = 
 | `-max-rooms` / `-max-peers` | `500` / `64` | Límites |
 | `-msg-rate` / `-msg-burst` / `-max-msg` | `30` / `60` / `256KiB` | Anti-abuso de señalización |
 | `-admin-token` | | Habilita `/api/admin/stats` y `/metrics` (Prometheus) |
+| `-create-token` | | Exige código para crear salas en `POST /api/rooms` (vacío = sin protección) |
 | `-open` | `false` | Abre el navegador al iniciar |
+
+### Salas con código de acceso
+
+Con `-create-token` (o `SWR_CREATE_TOKEN`) creas salas solo con el secreto: los invitados, OBS y los enlaces de la sala no cambian. El valor debe tener entre 16 y 128 caracteres `A-Z a-z 0-9 - _`; en blanco el servidor queda abierto como siempre (LAN, escritorio y lanzador de Windows).
+
+- Sin credencial, `POST /api/rooms` responde `401` con el código estable `room_create_forbidden`; los intentos fallidos tienen su propio límite (`429 room_create_rate_limited`) y no gastan el límite de creación.
+- La página principal pide el código cuando `GET /api/config` anuncia `createProtected`; solo vive en la pestaña, nunca en `localStorage`.
+- Para CI o scripts basta una cabecera:
+
+```bash
+curl -sS -X POST https://live.example.com/api/rooms \
+  -H "Authorization: Bearer $SWR_CREATE_TOKEN" \
+  -H "Content-Type: application/json" -d "{\"title\":\"Prueba\"}"
+```
 
 ## Desarrollo
 

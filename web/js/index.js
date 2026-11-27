@@ -1,5 +1,14 @@
 import { $, el, api, toast, readStored, writeStored } from "./rtc.js";
 import { newVdoRoom, vdoHostPath, vdoRoomID } from "./vdo.js";
+import { codeVisible, createHeaders, validCreateCode } from "./create-access.js";
+
+// POST /api/rooms is protected when the server runs with -create-token. The
+// code lives only in this tab's input: never in storage, the URL or a room
+// payload. An old server without the flag simply keeps the field hidden.
+let createProtected = false;
+const accessCode = () => $("#createToken").value.trim();
+const syncAccessCode = () => $("#accessCodeRow").classList.toggle("hidden", !codeVisible(createProtected, $("#roomEngine").value));
+api("/api/config").then((cfg) => { createProtected = !!(cfg && cfg.createProtected); syncAccessCode(); }).catch(() => {});
 
 $("#roomEngine").onchange = () => {
   const vdo = $("#roomEngine").value === "vdo";
@@ -7,6 +16,7 @@ $("#roomEngine").onchange = () => {
   document.querySelector('label[for="room"]').textContent = vdo ? "Prefijo de sala (opcional)" : "ID de sala (opcional)";
   $("#roomEngineHelp").textContent = vdo ? "Sala separada en la aplicación oficial de VDO.Ninja. Conserva nuestro marco visual, temas y accesos; sus controles de producción son propios. No usa el relé ni la cuota Cloudflare de este servidor. Al crearla se carga el servicio externo, sujeto a sus condiciones y privacidad." : "Nuestro estudio completo, con relé local. El anfitrión puede habilitar Cloudflare desde una sala con contraseña.";
   $("#lobby").disabled = vdo;
+  syncAccessCode();
 };
 
 const saved = () => {
@@ -27,12 +37,15 @@ $("#create").addEventListener("click", async () => {
       location.href = vdoHostPath(config); return;
     }
     if (new TextEncoder().encode($("#pw").value).length > 72) throw new Error("La contraseña admite hasta 72 bytes (los acentos y emojis ocupan más de uno).");
+    const code = accessCode();
+    if (createProtected && !code) throw new Error("Este servidor pide un código de acceso para crear salas.");
+    if (code && !validCreateCode(code)) throw new Error("El código de acceso tiene entre 16 y 128 caracteres: letras, números, «-» o «_».");
     const keys = await api("/api/rooms", {
       room: $("#room").value.trim().toLowerCase(),
       title: $("#title").value.trim(),
       password: $("#pw").value,
       lobby: $("#lobby").checked,
-    });
+    }, createHeaders(code));
     const all = saved();
     all[keys.room] = { ...keys, title: $("#title").value.trim(), created: Date.now() };
     try { localStorage.setItem("swr.rooms", JSON.stringify(all)); }
@@ -40,6 +53,9 @@ $("#create").addEventListener("click", async () => {
     // The host key travels in the fragment: never sent to servers or logged.
     location.href = `/studio?room=${encodeURIComponent(keys.room)}#key=${encodeURIComponent(keys.hostKey)}`;
   } catch (e) {
+    // The server refused the code: reveal the field even if /api/config never
+    // answered (proxy, offline), so the user can retry without a reload.
+    if (e.code === "room_create_forbidden") { createProtected = true; syncAccessCode(); $("#createToken").focus(); }
     toast(e.message, "err");
     btn.disabled = false;
   }
