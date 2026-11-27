@@ -85,7 +85,6 @@ type Session struct {
 	removes []func()
 	log        *slog.Logger
 	stream     string
-	targets    []string
 	destFailed bool // a tee destination failed to open and will not recover
 }
 
@@ -285,7 +284,6 @@ func Start(ffmpeg string, s *sfu.Stream, dests []Destination, st Settings, log *
 	sess.status = Status{Live: true, Since: time.Now().Unix(), Targets: names}
 	sess.log = log
 	sess.stream = s.ID
-	sess.targets = names
 	go sess.readStats(stderr)
 	go func() {
 		err := cmd.Wait()
