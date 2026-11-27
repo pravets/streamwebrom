@@ -4,7 +4,7 @@ import { moduleURL } from './module-url.mjs';
 
 // chat.js imports rtc.js, which reads location at module scope.
 globalThis.location = { search: '', hash: '' };
-const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow, messageKey, unreadAfterSeed, seenAfterRemove } = await import(await moduleURL('chat.js'));
+const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow, messageKey, unreadAfterSeed, seenAfterRemove, unreadAfterRemove } = await import(await moduleURL('chat.js'));
 
 test('conversationKey is the sorted pair, symmetric and never the general key', () => {
   assert.equal(conversationKey('bob', 'ana'), conversationKey('ana', 'bob'));
@@ -139,4 +139,18 @@ test('a deleted message also moves the read marker that pointed at it', () => {
   // A marker on another message is untouched.
   assert.equal(seenAfterRemove('c3', 'c1', list, 0), 'c3');
   assert.equal(seenAfterRemove(undefined, 'c1', list, 0), undefined);
+});
+
+test('deleting an unread message also drops its badge', () => {
+  const mine = 'me';
+  // The only dm of a hidden conversation is deleted: nothing is unread now.
+  assert.equal(unreadAfterRemove([], undefined, mine, 1), 0);
+  // Several unread messages: the counter loses just the removed one.
+  assert.equal(unreadAfterRemove([{ id: 'a' }], undefined, mine, 3), 2);
+  // With a read marker the count is rebuilt from the remaining messages.
+  assert.equal(unreadAfterRemove([{ id: 'a', peerId: 'ana' }, { id: 'b', peerId: 'ana' }], 'a', mine, 5), 1);
+  // Own echoes never count.
+  assert.equal(unreadAfterRemove([{ id: 'a' }, { id: 'b', peerId: mine }], 'a', mine, 2), 0);
+  // A marker that is gone counts the whole remaining list, as in seed().
+  assert.equal(unreadAfterRemove([{ id: 'a', peerId: 'ana' }], 'gone', mine, 1), 1);
 });

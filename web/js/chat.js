@@ -233,6 +233,19 @@ export function seenAfterRemove(marker, id, list, i) {
 }
 
 /**
+ * Badge count after `id` was removed from `list`. A badge must not outlive the
+ * message it counted: with a read marker the count is recomputed from what is
+ * left, and without one the tracked counter loses the removed message. Pure.
+ */
+export function unreadAfterRemove(list, marker, myId, previous = 0) {
+  if (marker) {
+    const at = list.findIndex((c) => c.id && c.id === marker);
+    return (at < 0 ? list : list.slice(at + 1)).filter((c) => !(myId && c.peerId === myId)).length;
+  }
+  return Math.max(0, previous - 1);
+}
+
+/**
  * Wire a chat pane (log + composer + conversation switcher). Shared by the
  * studio tab and the guest drawer. opts:
  *   log, switcher, input, sendButton  DOM nodes
@@ -377,6 +390,16 @@ export function createChat(opts) {
         const next = seenAfterRemove(lastSeen.get(key), id, list, i);
         if (next) lastSeen.set(key, next);
         else lastSeen.delete(key);
+      }
+      // Recount the badge from what is actually left, so removing the only
+      // unread dm clears it instead of keeping a count nothing stands for.
+      if (unread[key] && !(visible() && key === openKey)) {
+        const n = unreadAfterRemove(list, lastSeen.get(key), myId(), unread[key]);
+        const next = { ...unread };
+        if (n > 0) next[key] = n;
+        else delete next[key];
+        unread = next;
+        if (onUnread) onUnread(total());
       }
     }
     log.querySelector(`[data-cid="${CSS.escape(id)}"]`)?.remove();
