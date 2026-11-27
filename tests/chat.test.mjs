@@ -154,3 +154,14 @@ test('deleting an unread message also drops its badge', () => {
   // A marker that is gone counts the whole remaining list, as in seed().
   assert.equal(unreadAfterRemove([{ id: 'a', peerId: 'ana' }], 'gone', mine, 1), 1);
 });
+
+test('removing my own echo keeps the peer message unread', () => {
+  const mine = 'me';
+  // Hidden conversation without a marker: incoming `a` plus my echo `b`.
+  // Deleting `b` must not clear the badge that belongs to `a`.
+  assert.equal(unreadAfterRemove([{ id: 'a', peerId: 'ana' }], undefined, mine, 1, { id: 'b', peerId: mine }), 1);
+  // Deleting the peer's own unread message still drops the counter.
+  assert.equal(unreadAfterRemove([], undefined, mine, 1, { id: 'a', peerId: 'ana' }), 0);
+  // The author is optional: callers that do not pass it keep the old behaviour.
+  assert.equal(unreadAfterRemove([], undefined, mine, 2), 1);
+});

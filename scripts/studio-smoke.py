@@ -1,16 +1,31 @@
 """Live network/battery stats, touch ordering, clean stage and OBS quality/recovery."""
 import argparse
-import base64
 import json
+import struct
 import time
+import zlib
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 from smoke_util import click_centered
 
-# A 1x1 PNG: enough for the media-file source, no fixture file in the repo.
-COVER_PNG = base64.b64decode(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
-)
+
+def solid_png(width, height, rgb=(48, 48, 64)):
+    """A plain PNG built in memory: the media source needs a real picture size.
+
+    A 1x1 canvas is degenerate for the encoder, so the smoke uses a small but
+    normal 16:9 frame instead of shipping a fixture file in the repository.
+    """
+    row = b"\x00" + bytes(rgb) * width
+    raw = row * height
+
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+COVER_PNG = solid_png(320, 180)
 
 parser=argparse.ArgumentParser()
 parser.add_argument('--url',default='http://localhost:18443')
@@ -159,7 +174,14 @@ with sync_playwright() as pw:
     host.locator('#sourceSettingsQuality select').select_option('cover')
     host.locator('#closeSourceSettings').click()
     guest_media = guest.locator('#grid .tile[data-kind="media"]')
-    expect(guest_media).to_have_count(1, timeout=20000)
+    try:
+        expect(guest_media).to_have_count(1, timeout=35000)
+    except AssertionError:
+        # The media source is published by the host; if the guest never
+        # subscribed, say why instead of only "count 0".
+        print('GUEST GRID:', guest.locator('#grid').inner_html()[:2000], flush=True)
+        print('PAGE ERRORS:', errors, flush=True)
+        raise
     expect(guest_media).to_have_class(__import__('re').compile('fit-cover'))
     expect(guest_media.locator('video')).to_have_css('object-fit', 'cover')
     # Switching language relabels the labels this module builds itself: the

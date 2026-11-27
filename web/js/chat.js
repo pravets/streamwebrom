@@ -233,15 +233,18 @@ export function seenAfterRemove(marker, id, list, i) {
 }
 
 /**
- * Badge count after `id` was removed from `list`. A badge must not outlive the
+ * Badge count after `gone` was removed from `list`. A badge must not outlive the
  * message it counted: with a read marker the count is recomputed from what is
- * left, and without one the tracked counter loses the removed message. Pure.
+ * left, and without one the tracked counter loses the removed message — but
+ * only when that message was someone else's. Removing my own echo never made
+ * anyone read the peer's unread message, so the counter stays. Pure.
  */
-export function unreadAfterRemove(list, marker, myId, previous = 0) {
+export function unreadAfterRemove(list, marker, myId, previous = 0, gone = null) {
   if (marker) {
     const at = list.findIndex((c) => c.id && c.id === marker);
     return (at < 0 ? list : list.slice(at + 1)).filter((c) => !(myId && c.peerId === myId)).length;
   }
+  if (gone && myId && gone.peerId === myId) return Math.max(0, previous);
   return Math.max(0, previous - 1);
 }
 
@@ -382,6 +385,9 @@ export function createChat(opts) {
     for (const [key, list] of histories) {
       const i = list.findIndex((c) => c.id === id);
       if (i < 0) continue;
+      // The author is needed after the splice: my own echo must not consume
+      // the badge of a peer message that is still unread.
+      const gone = list[i];
       list.splice(i, 1);
       // The read marker must not survive the message it pointed at: otherwise
       // the next snapshot looks like "marker gone" and badges already-read
@@ -394,7 +400,7 @@ export function createChat(opts) {
       // Recount the badge from what is actually left, so removing the only
       // unread dm clears it instead of keeping a count nothing stands for.
       if (unread[key] && !(visible() && key === openKey)) {
-        const n = unreadAfterRemove(list, lastSeen.get(key), myId(), unread[key]);
+        const n = unreadAfterRemove(list, lastSeen.get(key), myId(), unread[key], gone);
         const next = { ...unread };
         if (n > 0) next[key] = n;
         else delete next[key];
