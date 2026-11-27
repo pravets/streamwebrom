@@ -5,6 +5,7 @@ import argparse
 import json
 import time
 from playwright.sync_api import sync_playwright, expect
+from smoke_util import click_centered
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--url', default='http://localhost:18443')
@@ -75,8 +76,7 @@ with sync_playwright() as pw:
       return reports.some(r=>[...r.values()].some(s=>s.type==='inbound-rtp' && s.kind==='video' && s.framesDecoded>0));
     }""", timeout=25000)
     _btn = host.locator('#backstage .stagebtn').filter(has_text='Al escenario').first
-    _btn.evaluate("el => el.scrollIntoView({block:'center'})")
-    _btn.click()
+    click_centered(_btn)
     expect(host.locator('#backstage .stagebtn.on')).to_have_count(2)
     expect(guest.locator('#stageState')).to_contain_text('escenario', timeout=10000)
     viewer = page()

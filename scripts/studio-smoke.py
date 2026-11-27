@@ -1,9 +1,16 @@
 """Live network/battery stats, touch ordering, clean stage and OBS quality/recovery."""
 import argparse
+import base64
 import json
 import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
+from smoke_util import click_centered
+
+# A 1x1 PNG: enough for the media-file source, no fixture file in the repo.
+COVER_PNG = base64.b64decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+)
 
 parser=argparse.ArgumentParser()
 parser.add_argument('--url',default='http://localhost:18443')
@@ -80,8 +87,7 @@ with sync_playwright() as pw:
     host_guest=host.locator('#backstage .tile').filter(has=host.locator('.name').filter(has_text='Panelista'))
     stream_id=host_guest.get_attribute('data-id')
     _btn = host_guest.locator('.stagebtn')
-    _btn.evaluate("el => el.scrollIntoView({block:'center'})")
-    _btn.click()
+    click_centered(_btn)
     host.locator('#studioViewMenu summary').click()
     host.locator('#stageView').click()
     expect(host.locator('#studioRoot')).to_have_class('studio cinema')
@@ -144,6 +150,24 @@ with sync_playwright() as pw:
     accent.click()
     expect(host.locator('#sourceSettingsActions button').filter(has_text='Quitar destacado')).to_be_visible()
     host.locator('#closeSourceSettings').click()
+    # Media sources letterbox by default; the host can switch one to cover and
+    # the guest preview must follow the program through the shared room state.
+    host.locator('#mediaFile').set_input_files(files=[{'name': 'cover.png', 'mimeType': 'image/png', 'buffer': COVER_PNG}])
+    media_tile = host.locator('#backstage .tile[data-kind="media"]')
+    expect(media_tile).to_have_count(1, timeout=20000)
+    media_tile.locator('.source-options').click()
+    host.locator('#sourceSettingsQuality select').select_option('cover')
+    host.locator('#closeSourceSettings').click()
+    guest_media = guest.locator('#grid .tile[data-kind="media"]')
+    expect(guest_media).to_have_count(1, timeout=20000)
+    expect(guest_media).to_have_class(__import__('re').compile('fit-cover'))
+    expect(guest_media.locator('video')).to_have_css('object-fit', 'cover')
+    # Switching language relabels the labels this module builds itself: the
+    # conversation switcher and the dm button on the tiles.
+    guest.locator('.lang-picker').select_option('ru')
+    guest.locator('#chatBtn').click()
+    expect(guest.locator('#chatConvos button').first).to_contain_text('Общий')
+    expect(guest_media.locator('.tile-dm')).to_have_attribute('title', 'Личное сообщение')
     assert not errors,errors
-    print(json.dumps({'liveRTTAndRoomPing':True,'batteryChargingUpdates':True,'touchOrderSurvivesRotation':True,'fullScreen16by9':True,'hostStageOnly':True,'cameraSend360p':True,'obsFirstFrameMs':first_frame_ms,'obsMediaRecovers':True,'output360p720p':True,'persistentRoomRosterAndOptions':True,'hiddenBackstage':True,'accentNeedsSceneAndSlot':True,'pageErrors':errors}),flush=True)
+    print(json.dumps({'liveRTTAndRoomPing':True,'batteryChargingUpdates':True,'touchOrderSurvivesRotation':True,'fullScreen16by9':True,'hostStageOnly':True,'cameraSend360p':True,'obsFirstFrameMs':first_frame_ms,'obsMediaRecovers':True,'output360p720p':True,'persistentRoomRosterAndOptions':True,'hiddenBackstage':True,'accentNeedsSceneAndSlot':True,'mediaCoverFollowsProgram':True,'chatLabelsFollowLanguage':True,'pageErrors':errors}),flush=True)
     mobile.close();context.close();browser.close()

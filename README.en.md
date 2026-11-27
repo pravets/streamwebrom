@@ -107,6 +107,9 @@ WHIP to the reserved ID `program` requires `hostKey`; use `pushKey` for sources 
 | `novideo` · `noaudio` · `muted` · `videomute` | Audio only, video only, enter muted |
 | `screenshare` | Enter with screen sharing |
 | `effects=blur/bg/replace` · `blur` · `bgpreset=green` | Video effect (blur, virtual background, replacement) |
+| `effectfit=contain/cover` | Background or replacement image/video: fits whole with bars, or fills the frame and crops the edges |
+| `deaf` · `deafen` (`=0` turns it off) | Enter without hearing the room; your microphone keeps sending |
+| `landscape=1` (`=0` turns it off) | Keep the phone screen horizontal (locks in fullscreen; a hint on iOS) |
 
 **Output for OBS** `/view?room=R&…#key=VIEWKEY`
 
