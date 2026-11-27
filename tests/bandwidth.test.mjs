@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { moduleURL } from './module-url.mjs';
-const { senderProfile, needsOutputSource, explicitQuality } = await import(await moduleURL('bandwidth.js'));
+const { senderProfile, needsOutputSource, explicitQuality, PANEL_DEFAULTS, TUNING_PARAMS } = await import(await moduleURL('bandwidth.js'));
 const { relayMessage } = await import(await moduleURL('relay-status.js'));
 
 test('room profiles cap camera rate/fps/raster in either orientation and preserve lower requests', () => {
@@ -54,6 +54,15 @@ test('explicitQuality treats panel overrides and URL params as intent, defaults 
   assert.equal(explicitQuality({}, has(true)), true);
   // Missing prefs fall back to the defaults, not to "explicit".
   assert.equal(explicitQuality(undefined, has(false)), false);
+});
+test('the URL tuning knobs are declared once and wired as the explicit probe', () => {
+  // One list for the guest page and the studio camera, so the rule cannot drift.
+  assert.deepEqual([...TUNING_PARAMS].sort(), ['bitrate', 'fps', 'fr', 'framerate', 'h', 'height', 'quality', 'vb']);
+  // The pages inject "does the URL carry any of these?" as the probe; the
+  // defaults alone must never look like intent.
+  const probe = (present) => () => TUNING_PARAMS.some((name) => present.includes(name));
+  assert.equal(explicitQuality(PANEL_DEFAULTS, probe([])), false);
+  for (const name of TUNING_PARAMS) assert.equal(explicitQuality(PANEL_DEFAULTS, probe([name])), true, name);
 });
 test('host receives early usage warning, countdown and local confirmation without claiming billing cap', () => {
   const st={provider:'cloudflare',warning:false,usageBytes:44000000000,estimatedBytes:94000000000,budgetBytes:900000000000};

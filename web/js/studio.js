@@ -5,7 +5,7 @@ import { relayMonitor } from "./relay-status.js";
 import { mountVdo } from "./vdo.js";
 import { immersive } from "./immersive.js";
 import { Compositor, AudioMixer, accentApplies, ACCENT_LAYOUTS, quickAccent } from "./compositor.js";
-import { explicitQuality } from "./bandwidth.js";
+import { explicitQuality, TUNING_PARAMS } from "./bandwidth.js";
 import { createChat, GENERAL } from "./chat.js";
 import { listDevices, loadPrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain, QUALITIES, FPS } from "./devices.js";
 import { screenAudioNotice, stopScreenCapture } from "./devices.js";
@@ -332,7 +332,7 @@ $("#addCam").onclick = async () => {
 async function addLocalCam(stream, name) {
   let slot=2; while (local.has("host-camera-"+slot)) slot++;
   const cameraSlot = !hostCamId ? "host-camera" : "host-camera-" + slot;
-  const id = await addLocal(stream, "camera", name, { stream: cameraSlot, videoKbps: kbpsFor(Number(prefs.quality)), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 128, explicit: explicitQuality(prefs, () => ["bitrate", "vb", "quality", "height", "h", "fps", "framerate", "fr"].some((n) => params.has(n))) });
+  const id = await addLocal(stream, "camera", name, { stream: cameraSlot, videoKbps: kbpsFor(Number(prefs.quality)), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 128, explicit: explicitQuality(prefs, () => TUNING_PARAMS.some((n) => params.has(n))) });
   if (id) sources.get(id).mirror = false;
   return id;
 }

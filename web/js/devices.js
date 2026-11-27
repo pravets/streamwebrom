@@ -12,6 +12,7 @@
 //   so whatever the camera exposes becomes a slider or switch.
 // - Mic gain is applied with a Web Audio GainNode only when != 100 %.
 import { $, el, toast, params } from "./rtc.js";
+import { PANEL_DEFAULTS } from "./bandwidth.js";
 import { applyEffect, effectActive, needsCamera, effectsPanel } from "./effects.js";
 import { attachNativeAudio } from "./native-audio.js";
 import { t, onLangChange } from "./i18n.js";
@@ -41,7 +42,7 @@ const off = (...names) => names.some((n) => params.has(n) && ["0", "false", "off
 export function loadPrefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch {}
-  p = { camera: "", mic: "", speaker: "", quality: "720", fps: "30", echo: true, denoise: true, autogain: true, stereo: false, mirror: true, gain: 100, codec: "", effect: "none", effectPreset: "", effectStrength: 50, effectFit: "", flipH: false, flipV: false, ...p };
+  p = { camera: "", mic: "", speaker: "", quality: PANEL_DEFAULTS.quality, fps: PANEL_DEFAULTS.fps, echo: true, denoise: true, autogain: true, stereo: false, mirror: true, gain: 100, codec: "", effect: "none", effectPreset: "", effectStrength: 50, effectFit: "", flipH: false, flipV: false, ...p };
   const g = (n) => params.get(n);
   // &quality=0/1/2 (VDO) or a height
   if (params.has("quality")) p.quality = ({ 0: "1080", 1: "720", 2: "360" })[g("quality")] || g("quality");

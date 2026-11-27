@@ -13,7 +13,7 @@
 //   &landscape=1            lock the phone screen to landscape in fullscreen
 import { $, el, toast, params, api, Signal, publish, subscribe, levelMeter, staleRevision } from "./rtc.js";
 import { listDevices, loadPrefs, savePrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain } from "./devices.js";
-import { explicitQuality } from "./bandwidth.js";
+import { explicitQuality, TUNING_PARAMS } from "./bandwidth.js";
 import { remoteSnapshot, remoteStats, CAMCTL } from "./remote.js";
 import { createChat } from "./chat.js";
 import { automaticRoute } from "./network.js";
@@ -111,9 +111,14 @@ const videoKbps = () => remoteKbps || Number(params.get("bitrate") || params.get
 // explicit intent: they override the room bandwidth mode caps (balanced/eco),
 // exactly like the director panel does. Shipped defaults leave the room mode
 // in charge, so a source that never asked for anything is still protected.
-const TUNING_PARAMS = ["bitrate", "vb", "quality", "height", "h", "fps", "framerate", "fr"];
-const explicitTuning = explicitQuality(prefs, () => TUNING_PARAMS.some((n) => params.has(n)));
-const pubOpts = (name) => ({ kind: "camera", name, videoKbps: videoKbps(), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 96, explicit: explicitTuning });
+// The decision is re-made on every publication: a panel choice made mid-call
+// only lives in the publication options (setBitrate sets opts.explicit), so a
+// reconnect would otherwise republish at the defaults and get capped.
+function explicitNow() {
+  if (explicitQuality(prefs, () => TUNING_PARAMS.some((n) => params.has(n)))) return true;
+  return !!pub?.opts?.explicit;
+}
+const pubOpts = (name, sticky = !!pub?.opts?.explicit) => ({ kind: "camera", name, videoKbps: videoKbps(), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 96, explicit: sticky || explicitNow() });
 
 let meterTimer, noDeviceNotice = false;
 function showMeter(stream) {
@@ -239,8 +244,11 @@ async function connectMedia() {
   connectingMedia = true;
   if (!hadMediaConnection) connectionStatus(t("guest.connectingMedia"), "guest.connectingMedia");
   try {
+    // Capture the sticky flag before dropping pub: a rate the guest panel or
+    // the director tuned must survive the republish that follows a reconnect.
+    const sticky = !!pub?.opts?.explicit;
     pub?.stop(); pub = null;
-    const fresh = await publish(sig, media, pubOpts($("#name").value));
+    const fresh = await publish(sig, media, pubOpts($("#name").value, sticky));
     if (generation !== mediaGeneration) { fresh.stop(); return; }
     pub = fresh;
     unwatch(pub.id); // A rejoin snapshot can still contain our old stable ID.
@@ -296,7 +304,7 @@ async function resume(m) {
   for (const [id, x] of [...extraCams]) {
     try { x.pub.pc.close(); } catch {}
     try {
-      const fresh = await publish(sig, x.media, x.pub.opts);
+      const fresh = await publish(sig, x.media, { ...x.pub.opts, explicit: x.pub.opts.explicit || explicitNow() });
       if (sig.closed || sig.ws !== socket || extraCams.get(id) !== x) { fresh.stop(); continue; }
       x.pub = fresh;
       if (fresh.id !== id) { extraCams.delete(id); extraCams.set(fresh.id,x); }
