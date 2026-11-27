@@ -86,6 +86,9 @@ func NewHub(ctx context.Context, o Options) *Hub {
 		o.Logger = slog.Default()
 	}
 	h := &Hub{o: o, log: o.Logger, rooms: map[string]*Room{}, probes: map[string]*Room{}, relayRate: rate.NewLimiter(rate.Every(10*time.Second), 3)}
+	if o.Recorder != nil && o.Recorder.Log == nil {
+		o.Recorder.Log = o.Logger
+	}
 	h.upgrader = websocket.Upgrader{
 		ReadBufferSize: 4096, WriteBufferSize: 4096,
 		CheckOrigin:       o.CheckOrigin,
