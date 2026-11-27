@@ -237,7 +237,7 @@ function connectionStatus(text, key = "") {
   $("#connection").classList.toggle("hidden", hadMediaConnection || !text);
   $("#connectionText").textContent = text;
 }
-async function connectMedia() {
+async function connectMedia(carriedExplicit = false) {
   if (connectingMedia) return;
   if (!media.getTracks().length) { connectionStatus(""); return; }
   const generation = ++mediaGeneration;
@@ -246,7 +246,8 @@ async function connectMedia() {
   try {
     // Capture the sticky flag before dropping pub: a rate the guest panel or
     // the director tuned must survive the republish that follows a reconnect.
-    const sticky = !!pub?.opts?.explicit;
+    // resume() already dropped pub, so it passes the flag in explicitly.
+    const sticky = carriedExplicit || !!pub?.opts?.explicit;
     pub?.stop(); pub = null;
     const fresh = await publish(sig, media, pubOpts($("#name").value, sticky));
     if (generation !== mediaGeneration) { fresh.stop(); return; }
@@ -296,8 +297,11 @@ async function resume(m) {
   for (const id of [...remoteInfo.keys()]) unwatch(id);
   for (const s of m.streams || []) watch(s.id, s.kind, s.owner, "", s.revision);
   try { pub?.pc.close(); } catch {}
+  // Capture the explicit intent before dropping pub: a director command that
+  // only called setBitrate leaves it in the publication options, not in prefs.
+  const carriedExplicit = explicitNow();
   pub = null;
-  await connectMedia();
+  await connectMedia(carriedExplicit);
   if (sig.closed || sig.ws !== socket) return;
   stopScreen(false); // A new connection needs a new host authorization.
   if (sig.closed || sig.ws !== socket) return;

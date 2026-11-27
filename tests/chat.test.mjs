@@ -4,7 +4,7 @@ import { moduleURL } from './module-url.mjs';
 
 // chat.js imports rtc.js, which reads location at module scope.
 globalThis.location = { search: '', hash: '' };
-const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow, messageKey, unreadAfterSeed } = await import(await moduleURL('chat.js'));
+const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow, messageKey, unreadAfterSeed, seenAfterRemove } = await import(await moduleURL('chat.js'));
 
 test('conversationKey is the sorted pair, symmetric and never the general key', () => {
   assert.equal(conversationKey('bob', 'ana'), conversationKey('ana', 'bob'));
@@ -116,6 +116,27 @@ test('unread survives a reconnect seed without resurrecting old history', () => 
   assert.deepEqual(unreadAfterSeed(histories, new Map(), 'me'), {});
   // A read marker trimmed out of the 300-message window counts from the start.
   assert.deepEqual(unreadAfterSeed(new Map([[GENERAL, [{ id: 'x2', peerId: 'ana' }]]]), seen, 'me'), { [GENERAL]: 1 });
+  // A conversation this client never opened keeps the badge it already tracked
+  // (a dm that arrived while the pane was hidden) instead of losing it, and the
+  // whole restored history is still not counted as new.
+  assert.deepEqual(unreadAfterSeed(histories, new Map(), 'me', GENERAL, false, { [GENERAL]: 2 }), { [GENERAL]: 2 });
+  assert.deepEqual(unreadAfterSeed(histories, new Map(), 'me', GENERAL, true, { [GENERAL]: 2 }), {},
+    'a visible open conversation is read at once');
+  assert.deepEqual(unreadAfterSeed(histories, new Map(), 'me', GENERAL, false), {},
+    'nothing tracked and nothing read: no badge');
   // Pure: the inputs are not mutated.
   assert.equal(seen.get(GENERAL), 'c1');
+});
+
+test('a deleted message also moves the read marker that pointed at it', () => {
+  const list = [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }];
+  // Removing the marked message at index 1 (c2) steps back to c1: the next
+  // snapshot must not treat already-read history as new.
+  assert.equal(seenAfterRemove('c2', 'c2', list, 1), 'c1');
+  // Removing the first message drops the marker, so the tracked counter is
+  // kept instead of the whole history turning "new".
+  assert.equal(seenAfterRemove('c1', 'c1', list, 0), null);
+  // A marker on another message is untouched.
+  assert.equal(seenAfterRemove('c3', 'c1', list, 0), 'c3');
+  assert.equal(seenAfterRemove(undefined, 'c1', list, 0), undefined);
 });

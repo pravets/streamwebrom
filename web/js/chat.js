@@ -187,10 +187,17 @@ export function unreadAfter(state, m, openKey, myId, visible = true) {
  * the retained history counts as unread — there is no server-side read state.
  * Pure: returns a new object.
  */
-export function unreadAfterSeed(histories, seen, myId, openKey, visible = true) {
+export function unreadAfterSeed(histories, seen, myId, openKey, visible = true, previous = {}) {
   const out = {};
   for (const [key, list] of histories) {
-    if (!seen.has(key)) continue;
+    if (!seen.has(key)) {
+      // This client never recorded a read marker here. Keep the count it had
+      // already tracked (a dm that arrived while the pane was hidden), instead
+      // of wiping the badge or turning the whole restored history into "new".
+      const tracked = previous[key] || 0;
+      if (tracked && !(visible && key === openKey)) out[key] = tracked;
+      continue;
+    }
     const at = list.findIndex((c) => c.id && c.id === seen.get(key));
     const fresh = (at < 0 ? list : list.slice(at + 1)).filter((c) => !(myId && c.peerId === myId));
     if (!fresh.length) continue;
@@ -211,6 +218,18 @@ export function unreadOnShow(state, key, visible = true) {
   const next = { ...state };
   delete next[key];
   return next;
+}
+
+/**
+ * Read marker after `id` disappears from `list` at index `i`. The marker must
+ * never outlive the message it points at: otherwise the next snapshot finds no
+ * marker and badges already-read history. Step back to the message before it,
+ * or return null so the tracked counter is kept instead. Pure.
+ */
+export function seenAfterRemove(marker, id, list, i) {
+  if (marker !== id) return marker;
+  const previous = list[i - 1];
+  return previous && previous.id ? previous.id : null;
 }
 
 /**
@@ -347,9 +366,18 @@ export function createChat(opts) {
     if (n.dataset.mention && c.peerId !== myId() && onMention) onMention(c);
   }
   function remove(id) {
-    for (const list of histories.values()) {
+    for (const [key, list] of histories) {
       const i = list.findIndex((c) => c.id === id);
-      if (i >= 0) list.splice(i, 1);
+      if (i < 0) continue;
+      list.splice(i, 1);
+      // The read marker must not survive the message it pointed at: otherwise
+      // the next snapshot looks like "marker gone" and badges already-read
+      // history.
+      if (lastSeen.has(key)) {
+        const next = seenAfterRemove(lastSeen.get(key), id, list, i);
+        if (next) lastSeen.set(key, next);
+        else lastSeen.delete(key);
+      }
     }
     log.querySelector(`[data-cid="${CSS.escape(id)}"]`)?.remove();
   }
@@ -366,7 +394,10 @@ export function createChat(opts) {
       list.push(c);
       histories.set(key, list);
     }
-    unread = unreadAfterSeed(histories, lastSeen, myId(), openKey, visible());
+    unread = unreadAfterSeed(histories, lastSeen, myId(), openKey, visible(), unread);
+    // What is on screen has been read: advance the marker so the next snapshot
+    // does not badge messages the user is looking at right now.
+    if (visible()) markSeen(openKey);
     renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
   }
   // The switcher is rebuilt from scratch, so a language change relabels the
