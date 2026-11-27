@@ -352,9 +352,12 @@ export function createChat(opts) {
       if (policy() === "off" || (other && !canDM(other))) {
         setOpen(GENERAL);
         // The pane is on screen with the general chat open, so its badge must
-        // not survive the automatic switch. A hidden pane keeps the counter
-        // until the user actually looks at it.
+        // not survive the automatic switch, and the read marker must follow:
+        // otherwise the next snapshot sees a stale marker and badges what the
+        // user is looking at. A hidden pane keeps the counter until the user
+        // actually looks at it.
         unread = unreadOnShow(unread, GENERAL, visible());
+        if (visible()) markSeen(GENERAL);
         renderLog();
       }
     }
