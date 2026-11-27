@@ -16,6 +16,8 @@ package sfu
 import (
 	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,7 +75,7 @@ type pumpCtl struct {
 	sent atomic.Int64
 }
 
-func (p *pumpCtl) stop()       { p.cancel() }
+func (p *pumpCtl) stop()        { p.cancel() }
 func (p *pumpCtl) pause(v bool) { p.paused.Store(v) }
 
 // pumpFeedback mirrors internal/server's pump: a real pion track carrying a
@@ -284,8 +286,13 @@ func maxRecvDelta(pkts []rtcp.Packet) int64 {
 
 // TestSlowSinkMustNotStarveForwarder is the regression test for the fan-out
 // fix: one slow realtime sink must not throttle the publisher read loop. The
-// pump offers 100 pkt/s; even with a 50ms-per-packet stall sink the forwarder
+// pump offers 100 pkt/s; even with a 200ms-per-packet stall sink the forwarder
 // must keep processing ~100 pkt/s (drop-oldest in the slow sink's queue).
+//
+// The stall is deliberately longer than one packet interval so a synchronous
+// regression writes at most ~10 of the ~50 packets the pump may send in the
+// judgement window: with the >=75%-of-sent rule the test then cannot pass on a
+// throttled forwarder even when a loaded runner thins out the pump.
 func TestSlowSinkMustNotStarveForwarder(t *testing.T) {
 	e, err := NewEngine(Options{})
 	if err != nil {
@@ -299,7 +306,7 @@ func TestSlowSinkMustNotStarveForwarder(t *testing.T) {
 		t.Fatal("no forwarders")
 	}
 
-	sink := &stallSink{delay: 50 * time.Millisecond}
+	sink := &stallSink{delay: 200 * time.Millisecond}
 	remove := fs[0].AddSink(sink)
 	defer remove()
 
@@ -310,15 +317,15 @@ func TestSlowSinkMustNotStarveForwarder(t *testing.T) {
 	sentDelta := ctl.sent.Load() - sentBefore
 	processed := int64(after - before)
 	delta := maxRecvDelta(sniff.snapshot())
-	t.Logf("with one 50ms-stall sink: forwarder processed %d of %d sent packets in 2s; sink writes=%d; max TWCC recv delta=%dus (=%dms, nominal ~10ms)",
+	t.Logf("with one 200ms-stall sink: forwarder processed %d of %d sent packets in 2s; sink writes=%d; max TWCC recv delta=%dus (=%dms, nominal ~10ms)",
 		processed, sentDelta, sink.n.Load(), delta, delta/1000)
 	// Compare against what the pump really sent: a fixed 150/2s threshold
 	// assumed a perfect 100 pkt/s ticker, which a loaded runner does not honour.
 	if sentDelta < 50 {
 		t.Fatalf("pump only sent %d packets in 2s, too few to judge the forwarder", sentDelta)
 	}
-	if min := sentDelta * 3 / 4; processed < min {
-		t.Fatalf("one slow sink throttled the forwarder to %d of %d sent packets (want >=%d): publisher TWCC arrival times distort and delay-based BWE collapses", processed, sentDelta, min)
+	if wantMin := sentDelta * 3 / 4; processed < wantMin {
+		t.Fatalf("one slow sink throttled the forwarder to %d of %d sent packets (want >=%d): publisher TWCC arrival times distort and delay-based BWE collapses", processed, sentDelta, wantMin)
 	}
 }
 
@@ -377,9 +384,10 @@ func TestReliableSinkGetsEveryPacket(t *testing.T) {
 	// ~30, so its 256-slot queue overflows and drops oldest.
 	time.Sleep(3 * time.Second)
 	pump.stop()
-	time.Sleep(300 * time.Millisecond) // let in-flight packets reach the forwarder
-
-	want, _ := fs[0].Stats()
+	// Wait until the read loop stops counting: in-flight packets still arrive
+	// for a moment after the pump stops, and a packet counted after we sample
+	// want would make got > want look like a duplicate.
+	want := stableStats(t, fs[0])
 	want -= base
 	deadline := time.After(5 * time.Second)
 	for reliable.n.Load() < int64(want) {
@@ -401,5 +409,104 @@ func TestReliableSinkGetsEveryPacket(t *testing.T) {
 	}
 	if slow.n.Load() >= int64(want) {
 		t.Logf("note: realtime sink kept up (%d writes); drop path not exercised this run", slow.n.Load())
+	}
+}
+
+// stableStats waits until the forwarder's packet counter stops moving and
+// returns that settled value.
+func stableStats(t *testing.T, f *Forwarder) uint64 {
+	t.Helper()
+	prev, _ := f.Stats()
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+		next, _ := f.Stats()
+		if next == prev {
+			return next
+		}
+		prev = next
+	}
+	t.Fatalf("forwarder stats never settled (last packets=%d)", prev)
+	return prev
+}
+
+// slowCountSink writes slowly and counts what it wrote.
+type slowCountSink struct {
+	delay time.Duration
+	n     atomic.Int64
+}
+
+func (s *slowCountSink) WriteRTP(*rtp.Packet) error {
+	time.Sleep(s.delay)
+	s.n.Add(1)
+	return nil
+}
+
+// TestReliableSinkKeepsTailUnderConcurrentRemove is the regression test for the
+// shutdown race: a push that is between its admission and the enqueue when the
+// queue is closed must still reach the sink. The invariant after shutdown is
+// exact — everything the queue accepted was written, nothing dropped, nothing
+// written twice.
+func TestReliableSinkKeepsTailUnderConcurrentRemove(t *testing.T) {
+	for i := 0; i < 60; i++ {
+		sink := &slowCountSink{delay: 500 * time.Microsecond}
+		sq := newSinkQueue(sink, true, nil, "tail-test")
+
+		stop := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			seq := uint16(0)
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				seq++
+				sq.push(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: seq}, Payload: []byte{0xAB}})
+				time.Sleep(100 * time.Microsecond)
+			}
+		}()
+
+		// Shut down at varying points, with a queue that is usually non-empty
+		// so the flush handshake actually runs.
+		time.Sleep(time.Duration(1+i%3) * 2 * time.Millisecond)
+		sq.shutdown()
+		<-sq.done
+		close(stop)
+		<-done
+
+		if got, want := sink.n.Load(), sq.enqueued.Load(); got != want {
+			t.Fatalf("iteration %d: reliable sink wrote %d packets, queue accepted %d: the tail was lost or duplicated", i, got, want)
+		}
+	}
+}
+
+// errSink fails every write, like a full disk.
+type errSink struct{ n atomic.Int64 }
+
+func (s *errSink) WriteRTP(*rtp.Packet) error {
+	s.n.Add(1)
+	return errors.New("disk full")
+}
+
+// TestReliableSinkWriteErrorsAreVisible asserts that a broken recording target
+// is not silent: the first failure is logged, the rest are only counted, and
+// the queue keeps accepting packets instead of dying on the first error.
+func TestReliableSinkWriteErrorsAreVisible(t *testing.T) {
+	var logs bytes.Buffer
+	sq := newSinkQueue(&errSink{}, true, slog.New(slog.NewTextHandler(&logs, nil)), "cam/rec")
+
+	for i := 1; i <= 3; i++ {
+		sq.push(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: uint16(i)}, Payload: []byte{0x01}})
+	}
+	sq.shutdown()
+	<-sq.done
+
+	if got := sq.writeErrs.Load(); got != 3 {
+		t.Fatalf("writeErrs = %d, want 3 (every failed write counted)", got)
+	}
+	if n := strings.Count(logs.String(), "sink write failed"); n != 1 {
+		t.Fatalf("failure logged %d times, want exactly once (first error only): %q", n, logs.String())
 	}
 }
