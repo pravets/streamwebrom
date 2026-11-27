@@ -64,7 +64,10 @@ $("#create").addEventListener("click", async () => {
     }
     if (!creationReady(createState, engine)) throw new Error(t("home.createConfigFailed"));
     const code = $("#createCode").value;
-    if (createState.protected && !validCreateCode(code)) throw new Error(t("home.accessCodeInvalid"));
+    // A protected server always needs a valid code; on an open server the code
+    // is optional, but if the user typed one it must be well formed.
+    if (createState.protected && !code) throw new Error(t("home.accessCodeRequired"));
+    if (code && !validCreateCode(code)) throw new Error(t("home.accessCodeInvalid"));
     if (new TextEncoder().encode($("#pw").value).length > 72) throw new Error(t("home.passwordTooLong"));
     const keys = await api("/api/rooms", {
       room: $("#room").value.trim().toLowerCase(),

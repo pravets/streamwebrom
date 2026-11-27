@@ -153,6 +153,8 @@ curl -X POST https://live.example.com/api/rooms \
 
 También se acepta `X-Create-Token`. Sin el código, cualquier visitante puede crear salas y ocupar `-max-rooms`; vacío desactiva la protección (LAN, escritorio, lanzador de Windows). No sustituye a la contraseña de invitados ni a las claves de la sala: esas protegen una sala ya creada. Las comprobaciones de red (`/api/route-check`) siguen abiertas para invitar invitados, pero tienen su propia cuota de 32 y no gastan `-max-rooms`; sus claves no permiten grabar, emitir en directo ni publicar por WHIP/WHEP.
 
+Los rechazos llevan un código estable para scripts e interfaz: `401` con `room_create_forbidden` (falta el código o es incorrecto) y `429` con `room_create_rate_limited` (se agotó el presupuesto de intentos fallidos; no gasta el de creación).
+
 ## Desarrollo
 
 ```bash

@@ -51,14 +51,15 @@ type Server struct {
 	probeRate map[string]*rate.Limiter
 	ipConns   map[string]int // open WebSockets per client IP
 
-	// Wrong create-token attempts get their own budget, so guessing a secret
-	// can never spend the allowance that creates real rooms.
+	// The optional create-token secret is kept only as a hash, and wrong
+	// attempts are counted in their own budget so guessing a secret can never
+	// spend the allowance that creates real rooms.
 	createHash [sha256.Size]byte
 	createAuth map[string]*createAuthEntry
 	authSweep  time.Time
 }
 
-// create-auth limits: ten guesses in a burst, one more per second, and a
+// Create-token limits: ten guesses in a burst, one more per second, and a
 // bounded map that forgets addresses idle for ten minutes.
 const (
 	createTokenMaxLen  = 128

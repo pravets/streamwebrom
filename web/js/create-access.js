@@ -30,6 +30,7 @@ export function configForbidden() {
   return { status: states.READY, protected: true };
 }
 
+// VDO.Ninja rooms are created by another service, so they never need the code.
 export function codeVisible(state, engine) {
   return !!state && state.protected && engine !== "vdo";
 }
