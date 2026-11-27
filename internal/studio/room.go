@@ -93,6 +93,7 @@ type State struct {
 	Volumes    map[string]float64 `json:"volumes"`    // stream id -> gain 0..2
 	StageMuted bool               `json:"stageMuted"` // whole stage muted
 	Hidden     map[string]bool    `json:"hidden"`     // stream id -> video hidden, audio kept
+	Fit        map[string]string  `json:"fit"`        // stream id -> contain | cover for media sources
 	Bandwidth  string             `json:"bandwidth"`  // eco | balanced | quality; applies to camera/screen senders
 	Connection string             `json:"connection"` // local by default; cloudflare requires host/master authorization
 	// DMPolicy gates direct messages: all (default), host-only (guests may
@@ -343,6 +344,7 @@ func cloneState(in State) (State, error) {
 	s.Labels = maps.Clone(in.Labels)
 	s.Muted = maps.Clone(in.Muted)
 	s.Hidden = maps.Clone(in.Hidden)
+	s.Fit = maps.Clone(in.Fit)
 	s.Volumes = maps.Clone(in.Volumes)
 	s.Scenes = maps.Clone(in.Scenes)
 	for k, sc := range s.Scenes {
