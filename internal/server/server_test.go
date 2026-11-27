@@ -32,7 +32,11 @@ type env struct {
 	dir string
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvWith(t, nil) }
+
+// newEnvWith builds the same fixture with extra configuration, so tests that
+// need e.g. a create token do not duplicate the hub wiring.
+func newEnvWith(t *testing.T, mutate func(*config.Config)) *env {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	eng, err := sfu.NewEngine(sfu.Options{Logger: log, GatherTimeout: time.Second})
@@ -42,6 +46,9 @@ func newEnv(t *testing.T) *env {
 	t.Cleanup(func() { _ = eng.Close() })
 	cfg := config.Default()
 	cfg.STUN = nil
+	if mutate != nil {
+		mutate(&cfg)
+	}
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
