@@ -56,6 +56,7 @@ func TestScrubSecrets(t *testing.T) {
 
 func TestReadStatsClearsStaleErrorWhenProgressResumes(t *testing.T) {
 	s := &Session{}
+	s.status.Live = true // only a running session self-heals
 	s.readStats(strings.NewReader("Non-monotonous DTS in output stream 0:1\nfps=14.26\nbitrate=N/A\nout_time=00:15:55.157333\nprogress=continue\n"))
 	st := s.Status()
 	if st.LastError != "" {
@@ -77,6 +78,58 @@ func TestReadStatsLogsScrubbedCause(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "ffmpeg stderr") || !strings.Contains(out, "rtmp://***") || strings.Contains(out, "secret-key") {
 		t.Fatalf("journal must carry the scrubbed cause: %q", out)
+	}
+}
+
+// A diagnostic can contain "=" itself: the tee muxer writes
+// "[f=flv:onfail=ignore]" and srt URLs carry "?streamid=abc". Those must reach
+// the journal, scrubbed, instead of being parsed as progress and dropped.
+func TestDiagnosticsWithEqualsAreLogged(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Session{log: slog.New(slog.NewTextHandler(&buf, nil)), stream: "program"}
+	s.readStats(strings.NewReader(
+		"[tee] Unable to open srt://example:9000?streamid=abc&passphrase=topsecret: Connection refused\n" +
+			"[f=flv:onfail=ignore] muxer failed\n"))
+	st := s.Status()
+	if st.LastError == "" {
+		t.Fatal("diagnostic with '=' did not raise the indicator")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Connection refused") {
+		t.Fatalf("failure cause not logged: %q", out)
+	}
+	for _, secret := range []string{"abc", "topsecret"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("secret %q leaked into the journal: %q", secret, out)
+		}
+	}
+}
+
+// Ordinary progress keys that the studio does not display are still progress
+// output, not errors.
+func TestProgressKeysAreNotDiagnostics(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Session{log: slog.New(slog.NewTextHandler(&buf, nil)), stream: "program"}
+	s.status.Live = true
+	s.readStats(strings.NewReader("frame=42\nfps=30\nstream_0_0_q=28.0\nspeed=1.01x\nbitrate=4000k\nprogress=continue\n"))
+	st := s.Status()
+	if st.LastError != "" {
+		t.Fatalf("progress output raised the error indicator: %q", st.LastError)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("progress output logged as diagnostics: %q", buf.String())
+	}
+}
+
+// After cmd.Wait recorded the exit error, a progress line already in flight
+// must not wipe it: the studio would show a dead session with no reason.
+func TestFinishedSessionKeepsExitError(t *testing.T) {
+	s := &Session{log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), stream: "program"}
+	s.status.Live = false
+	s.status.LastError = "exit status 251"
+	s.readStats(strings.NewReader("fps=14\nbitrate=N/A\nout_time=00:00:06\nprogress=continue\n"))
+	if got := s.Status().LastError; got != "exit status 251" {
+		t.Fatalf("exit error erased by a late progress line: %q", got)
 	}
 }
 

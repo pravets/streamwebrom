@@ -306,6 +306,18 @@ func Start(ffmpeg string, s *sfu.Stream, dests []Destination, st Settings, log *
 	return sess, nil
 }
 
+// progressKey reports whether a "k=v" line came from ffmpeg's -progress stream
+// rather than from its diagnostics. Keys we do not store are still progress
+// output, so they must not be mistaken for errors.
+func progressKey(k string) bool {
+	switch k {
+	case "frame", "fps", "bitrate", "total_size", "out_time_us", "out_time_ms",
+		"out_time", "dup_frames", "drop_frames", "speed", "progress":
+		return true
+	}
+	return strings.HasPrefix(k, "stream_") && strings.HasSuffix(k, "_q")
+}
+
 func (s *Session) readStats(r io.Reader) {
 	if r == nil {
 		return
@@ -319,10 +331,11 @@ func (s *Session) readStats(r io.Reader) {
 	for sc.Scan() {
 		line := sc.Text()
 		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			// ffmpeg diagnostics can contain complete RTMP URLs and stream
-			// keys: log them scrubbed so a failed start keeps its cause in
-			// the journal, and show the studio a generic indicator.
+		if !ok || !progressKey(k) {
+			// Diagnostics can carry "=" themselves - the tee muxer's
+			// "[f=flv:onfail=ignore]" or an srt URL with "?streamid=abc" -
+			// and dropping them hid the reason a destination failed. Log them
+			// scrubbed and show the studio a generic indicator.
 			log.Info("ffmpeg stderr", "stream", s.stream, "line", scrubSecrets(line))
 			s.mu.Lock()
 			s.status.LastError = "ffmpeg reported an error; check the destination and connection"
@@ -338,9 +351,9 @@ func (s *Session) readStats(r io.Reader) {
 		if k == "progress" {
 			s.mu.Lock()
 			s.status.Stats = fmt.Sprintf("%s fps · %s · %s", stats["fps"], stats["bitrate"], stats["out_time"])
-			if v == "continue" {
-				// Media flows again: one stray warning must not pin the
-				// error indicator for the whole session.
+			// Only a live session self-heals: once cmd.Wait recorded a real
+			// exit error, a progress line already in flight must not erase it.
+			if v == "continue" && s.status.Live {
 				s.status.LastError = ""
 			}
 			s.mu.Unlock()
