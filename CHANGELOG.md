@@ -1,5 +1,9 @@
 # Cambios
 
+## Sin publicar
+
+- La grabación ya no se queda con las pistas que existían al pulsar «Grabar»: una cámara o una pantalla compartida que se enciende a mitad de la sesión se graba también, en un archivo aparte (`-video2`, `-audio2`, …). Una pista que no se puede abrir se avisa y no detiene el resto. Los nombres de la primera cámara y del primer micrófono no cambian.
+
 ## v1.12.0 — Captura avanzada con audio aislado
 
 - Cliente Windows x64 con la misma interfaz: ventanas con audio de aplicación, pantalla con audio del sistema sin el árbol de voces de la sala y pestañas de contenido con audio propio.

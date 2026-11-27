@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -424,6 +426,159 @@ func TestWHIPtoWHEPandRecording(t *testing.T) {
 	dr.Header.Set("Authorization", "Bearer "+k.ViewKey)
 	if res, _ := http.DefaultClient.Do(dr); res.StatusCode != 200 {
 		t.Fatalf("delete session: %d", res.StatusCode)
+	}
+}
+
+// whipPublishTracks publishes via WHIP with one m-line per track; the caller
+// keeps the connection to switch a track on later.
+func whipPublishTracks(t *testing.T, url, token string, tracks ...webrtc.TrackLocal) *webrtc.PeerConnection {
+	t.Helper()
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	for _, tr := range tracks {
+		if _, err := pc.AddTransceiverFromTrack(tr, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendonly}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	offer, _ := pc.CreateOffer(nil)
+	_ = pc.SetLocalDescription(offer)
+	<-webrtc.GatheringCompletePromise(pc)
+	req, _ := http.NewRequest("POST", url, strings.NewReader(pc.LocalDescription().SDP))
+	req.Header.Set("Content-Type", "application/sdp")
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 201 {
+		t.Fatalf("whip: %d %s", res.StatusCode, body)
+	}
+	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: string(body)}); err != nil {
+		t.Fatal(err)
+	}
+	return pc
+}
+
+// A camera switched on in the middle of a recording is captured too: the
+// track comes up long after the recorder took its snapshot of the stream.
+func TestLateTrackIsRecorded(t *testing.T) {
+	ff, err := exec.LookPath("ffmpeg")
+	if err != nil || testing.Short() {
+		t.Skip("ffmpeg not available")
+	}
+	e := newEnv(t)
+	k := e.createRoom(t, `{"room":"late-room"}`)
+
+	first, _ := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}, "screen", "late")
+	second, _ := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}, "camera", "late")
+	// Both m-lines are offered; the camera stays empty until the show is
+	// being recorded.
+	pc := whipPublishTracks(t, e.ts.URL+"/whip/late-room/cam", k.PushKey, first, second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pumpTrack(ctx, first)
+
+	host := e.dial(t)
+	host.send(map[string]any{"type": "join", "room": "late-room", "role": "host", "key": k.HostKey})
+	host.expect("welcome")
+	time.Sleep(500 * time.Millisecond) // first track flowing
+	host.send(map[string]any{"type": "record", "action": "start", "stream": "cam"})
+	if st := host.expect("state"); len(st.State.Recording) != 1 {
+		t.Fatalf("recording not active: %+v", st.State.Recording)
+	}
+
+	camera, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}, "camera", "late")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var send *webrtc.RTPSender
+	for _, s := range pc.GetSenders() {
+		if s.Track() == second {
+			send = s
+		}
+	}
+	if send == nil {
+		t.Fatal("no sender for the idle camera m-line")
+	}
+	if err := send.ReplaceTrack(camera); err != nil {
+		t.Fatal(err)
+	}
+	go pumpTrack(ctx, camera)
+
+	files, err := waitFiles(filepath.Join(e.dir, "recordings", "late-room"), "cam-*-video2.ivf", time.Now().Add(5*time.Second))
+	if err != nil {
+		t.Fatalf("late track not recorded: %v (have %v)", err, files)
+	}
+	time.Sleep(700 * time.Millisecond) // some media for the late track
+	host.send(map[string]any{"type": "record", "action": "stop", "stream": "cam"})
+	host.expect("state")
+
+	videos, _ := filepath.Glob(filepath.Join(e.dir, "recordings", "late-room", "cam-*-video*.ivf"))
+	if len(videos) != 2 {
+		t.Fatalf("expected two video files, got %v", videos)
+	}
+	for _, f := range videos {
+		if fi, err := os.Stat(f); err != nil || fi.Size() < 1000 {
+			t.Fatalf("recording %s too small: %v %v", f, fi, err)
+		}
+	}
+	// The muxed file keeps the old name and holds both pictures.
+	mkv, _ := filepath.Glob(filepath.Join(e.dir, "recordings", "late-room", "cam-*.mkv"))
+	if len(mkv) != 1 {
+		t.Fatalf("expected one muxed file, got %v", mkv)
+	}
+	probe, err := exec.Command(ffprobeBinary(ff), "-v", "error", "-select_streams", "v", "-show_entries", "stream=index", "-of", "csv=p=0", mkv[0]).Output()
+	if err != nil {
+		t.Skipf("ffprobe unavailable: %v", err)
+	}
+	if n := len(strings.Fields(strings.ReplaceAll(string(probe), ",", "\n"))); n != 2 {
+		t.Fatalf("expected two video streams in %s, got %d: %q", mkv[0], n, probe)
+	}
+}
+
+// ffprobeBinary finds ffprobe next to ffmpeg. LookPath keeps the extension the
+// installed ffmpeg has, often upper case on Windows, so ffprobe must share it.
+func ffprobeBinary(ffmpeg string) string {
+	dir, base := filepath.Split(ffmpeg)
+	return filepath.Join(dir, "ffprobe"+filepath.Ext(base))
+}
+
+// waitFiles polls for a glob match: the late track is only recorded once its
+// OnTrack fires.
+func waitFiles(dir, pattern string, deadline time.Time) ([]string, error) {
+	for {
+		if files, _ := filepath.Glob(filepath.Join(dir, pattern)); len(files) > 0 {
+			return files, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, errors.New("timed out")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// pumpTrack writes VP8-looking RTP on track until ctx is cancelled.
+func pumpTrack(ctx context.Context, track *webrtc.TrackLocalStaticRTP) {
+	seq := uint16(0)
+	ts := uint32(0)
+	payload := append([]byte{0x10, 0x00, 0x00, 0x9d, 0x01, 0x2a}, bytes.Repeat([]byte{0xAB}, 400)...)
+	t := time.NewTicker(10 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			seq++
+			ts += 3000
+			_ = track.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, SequenceNumber: seq, Timestamp: ts, PayloadType: 96}, Payload: payload})
+		}
 	}
 }
 
