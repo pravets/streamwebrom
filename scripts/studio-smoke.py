@@ -185,8 +185,10 @@ with sync_playwright() as pw:
     expect(guest_media).to_have_class(__import__('re').compile('fit-cover'))
     expect(guest_media.locator('video')).to_have_css('object-fit', 'cover')
     # Switching language relabels the labels this module builds itself: the
-    # conversation switcher and the dm button on the tiles.
-    guest.locator('.lang-picker').select_option('ru')
+    # conversation switcher and the dm button on the tiles. Inside the call the
+    # prejoin picker is hidden, so switch through the same module API it calls.
+    guest.evaluate("async () => { const m = await import('/js/i18n.js'); m.setLang('ru'); }")
+    expect(guest.locator('#chatBtn')).to_have_attribute('title', 'Чат')
     guest.locator('#chatBtn').click()
     expect(guest.locator('#chatConvos button').first).to_contain_text('Общий')
     expect(guest_media.locator('.tile-dm')).to_have_attribute('title', 'Личное сообщение')
