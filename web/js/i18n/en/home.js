@@ -47,6 +47,8 @@ export const en = {
   "home.openVdoRoom": "Open VDO.Ninja room",
   "home.accessCode": "Server access code",
   "home.accessCodePlaceholder": "Only if the server requires it",
+  "home.accessCodeTabOnly": "This server asks for it to create rooms. It is kept only in this tab.",
+  "home.accessCodeRequired": "The server requires an access code to create a room.",
   "home.accessCodeInvalid": "The access code must be 16 to 128 letters, digits, hyphens or underscores.",
   "home.createConfigFailed": "Could not verify the server protection. Local rooms stay locked until you retry.",
   "home.retry": "Retry"

@@ -47,6 +47,8 @@ export const es = {
   "home.openVdoRoom": "Abrir sala VDO.Ninja",
   "home.accessCode": "Código de acceso del servidor",
   "home.accessCodePlaceholder": "Solo si el servidor lo exige",
+  "home.accessCodeTabOnly": "Este servidor lo pide para crear salas. Solo se guarda en esta pestaña.",
+  "home.accessCodeRequired": "Este servidor pide un código de acceso para crear salas.",
   "home.accessCodeInvalid": "El código de acceso debe tener entre 16 y 128 letras, números, guiones o guiones bajos.",
   "home.createConfigFailed": "No se pudo comprobar la protección del servidor. Las salas locales siguen bloqueadas hasta reintentar.",
   "home.retry": "Reintentar"

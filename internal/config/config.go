@@ -48,7 +48,7 @@ type Config struct {
 	UDPPortMax         int           // ephemeral range max
 	FFmpeg             string        // ffmpeg binary for restreaming
 	AdminToken         string        // protects /api/admin/*
-	CreateToken        string        // protects POST /api/rooms (empty disables it)
+	CreateToken        string        // secret required to create rooms (empty disables it)
 	AllowedOrigins     []string      // WebSocket origins allowed ("*" = any)
 	MaxRooms           int           // hard cap on concurrent rooms
 	MaxPeers           int           // per room
@@ -224,11 +224,6 @@ func (c Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-// TLSEnabled reports whether the server terminates TLS itself.
-func (c Config) TLSEnabled() bool {
-	return c.TLSCert != "" || c.SelfSigned || c.AutocertDomain != ""
-}
-
 // validCreateToken keeps the room secret inside the set every layer can carry:
 // a plain ASCII token travels unchanged in a fetch Authorization header, while
 // spaces, control characters and non-ASCII would be dropped or rejected by the
@@ -244,6 +239,11 @@ func validCreateToken(token string) bool {
 		}
 	}
 	return true
+}
+
+// TLSEnabled reports whether the server terminates TLS itself.
+func (c Config) TLSEnabled() bool {
+	return c.TLSCert != "" || c.SelfSigned || c.AutocertDomain != ""
 }
 
 func splitList(s string) []string {
