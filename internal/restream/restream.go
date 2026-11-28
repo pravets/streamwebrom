@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -49,7 +50,9 @@ func (d Destination) Validate() error {
 	if u.Host == "" {
 		return fmt.Errorf("destination %q: missing host", d.Name)
 	}
-	if strings.ContainsAny(d.URL, "|[]\n\r\\'\x00") || len(d.URL) > 4096 || len(d.Name) > 100 {
+	// Whitespace and quotes would split the URL inside ffmpeg's diagnostics,
+	// leaving the tail (often the stream key) unmasked by the scrubber.
+	if strings.ContainsAny(d.URL, "|[]\n\r\t\\'\"\x00 ") || len(d.URL) > 4096 || len(d.Name) > 100 {
 		return fmt.Errorf("destination %q: invalid characters", d.Name)
 	}
 	return nil
@@ -74,12 +77,15 @@ type Status struct {
 
 // Session is a running restream.
 type Session struct {
-	cancel  context.CancelFunc
-	done    chan struct{}
-	mu      sync.Mutex
-	status  Status
-	conns   []*net.UDPConn
-	removes []func()
+	cancel     context.CancelFunc
+	done       chan struct{}
+	mu         sync.Mutex
+	status     Status
+	conns      []*net.UDPConn
+	removes    []func()
+	log        *slog.Logger
+	stream     string
+	destFailed bool // a tee destination failed to open and will not recover
 }
 
 // Status returns a snapshot.
@@ -189,6 +195,9 @@ func BuildArgs(videoMime string, dests []Destination, st Settings) []string {
 
 // Start launches the restream for stream s.
 func Start(ffmpeg string, s *sfu.Stream, dests []Destination, st Settings, log *slog.Logger) (*Session, error) {
+	if log == nil {
+		log = slog.Default()
+	}
 	if len(dests) == 0 || len(dests) > 16 {
 		return nil, errors.New("expected 1-16 destinations")
 	}
@@ -273,6 +282,8 @@ func Start(ffmpeg string, s *sfu.Stream, dests []Destination, st Settings, log *
 		names = append(names, d.Name)
 	}
 	sess.status = Status{Live: true, Since: time.Now().Unix(), Targets: names}
+	sess.log = log
+	sess.stream = s.ID
 	go sess.readStats(stderr)
 	go func() {
 		err := cmd.Wait()
@@ -288,7 +299,7 @@ func Start(ffmpeg string, s *sfu.Stream, dests []Destination, st Settings, log *
 			sess.status.LastError = err.Error()
 		}
 		sess.mu.Unlock()
-		log.Info("restream ended", "stream", s.ID, "err", err)
+		log.Info("restream ended", "stream", s.ID, "err", err, "targets", names)
 		close(sess.done)
 	}()
 	s.OnClose(func() { cancel() })
@@ -296,19 +307,44 @@ func Start(ffmpeg string, s *sfu.Stream, dests []Destination, st Settings, log *
 	return sess, nil
 }
 
+// progressKey reports whether a "k=v" line came from ffmpeg's -progress stream
+// rather than from its diagnostics. Keys we do not store are still progress
+// output, so they must not be mistaken for errors.
+func progressKey(k string) bool {
+	switch k {
+	case "frame", "fps", "bitrate", "total_size", "out_time_us", "out_time_ms",
+		"out_time", "dup_frames", "drop_frames", "speed", "progress":
+		return true
+	}
+	return strings.HasPrefix(k, "stream_") && strings.HasSuffix(k, "_q")
+}
+
 func (s *Session) readStats(r io.Reader) {
 	if r == nil {
 		return
+	}
+	log := s.log
+	if log == nil {
+		log = slog.Default()
 	}
 	sc := bufio.NewScanner(r)
 	stats := map[string]string{}
 	for sc.Scan() {
 		line := sc.Text()
 		k, v, ok := strings.Cut(line, "=")
-		if !ok {
+		if !ok || !progressKey(k) {
+			// Diagnostics can carry "=" themselves - the tee muxer's
+			// "[f=flv:onfail=ignore]" or an srt URL with "?streamid=abc" -
+			// and dropping them hid the reason a destination failed. Log them
+			// scrubbed and show the studio a generic indicator.
+			log.Info("ffmpeg stderr", "stream", s.stream, "line", scrubSecrets(line))
 			s.mu.Lock()
-			// ffmpeg diagnostics can contain complete RTMP URLs and stream keys.
-			s.status.LastError = "ffmpeg reported an error; check the destination and connection"
+			if s.status.Live {
+				// A line still in the pipe after cmd.Wait must not overwrite
+				// the exit status with a generic message.
+				s.status.LastError = "ffmpeg reported an error; check the destination and connection"
+				s.destFailed = s.destFailed || destinationFailure(line)
+			}
 			s.mu.Unlock()
 			continue
 		}
@@ -321,9 +357,70 @@ func (s *Session) readStats(r io.Reader) {
 		if k == "progress" {
 			s.mu.Lock()
 			s.status.Stats = fmt.Sprintf("%s fps · %s · %s", stats["fps"], stats["bitrate"], stats["out_time"])
+			// Only a live session with every destination still up self-heals:
+			// once cmd.Wait recorded a real exit error, or tee excluded a
+			// destination, a progress line must not erase the indicator.
+			if v == "continue" && s.status.Live && !s.destFailed {
+				s.status.LastError = ""
+			}
 			s.mu.Unlock()
 		}
 	}
+}
+
+// secretURL matches destination URLs (which embed stream keys) and secretKV
+// matches key/password style parameters inside ffmpeg diagnostics.
+var (
+	secretURL = regexp.MustCompile(`(?i)\b(rtmps?|srt|rtsp|https?)://[^\s"'|]+`)
+	secretKV  = regexp.MustCompile(`(?i)\b(key|streamkey|stream_key|streamid|password|passwd|passphrase|secret|token|auth|signature)=([^\s&"'|]+)`)
+)
+
+// scrubSecrets replaces destination URLs and credential parameters with ***
+// so ffmpeg stderr can be logged without leaking stream keys.
+func scrubSecrets(line string) string {
+	line = secretURL.ReplaceAllString(line, "$1://***")
+	return secretKV.ReplaceAllString(line, "$1=***")
+}
+
+// retryingPhrases announce another attempt on the same destination. libsrt
+// prints the address it gave up on and then connects to the next one, so the
+// diagnostic carries a destination URL while the stream actually recovers.
+var retryingPhrases = []string{"trying next address", "next address", "trying again", "retrying", "reconnecting"}
+
+// destinationFailure reports whether a diagnostic line describes a tee
+// destination that failed to open. onfail=ignore keeps the rest of the session
+// alive and tee does not reconnect the excluded slave, so such a failure never
+// recovers on its own: its indicator must stick for the whole session.
+//
+// A URL alone does not prove a failed destination - libsrt warns "Connection to
+// srt://... failed, trying next address" and then succeeds - so a line that
+// announces another attempt stays transient. A warning such as a non-monotonic
+// DTS matches neither the phrases nor a destination URL and stays transient
+// too.
+func destinationFailure(line string) bool {
+	// Phrases are matched on the line with destinations and credentials
+	// blanked out: a stream key that happens to contain "retrying" must not
+	// turn a real failure into a transient warning.
+	text := strings.ToLower(scrubSecrets(line))
+	for _, phrase := range retryingPhrases {
+		if strings.Contains(text, phrase) {
+			return false
+		}
+	}
+	if secretURL.MatchString(line) {
+		return true
+	}
+	for _, phrase := range []string{
+		"unable to open",
+		"cannot open connection",
+		"slave muxer",
+		"all tee outputs failed",
+	} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func trim(s string, n int) string {
