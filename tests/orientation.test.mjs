@@ -163,3 +163,17 @@ test('browsers that can lock orientation never show the rotate hint', () => {
   assert.equal(hint.classList.contains('hidden'), true);
   ctl.destroy();
 });
+test('mobile browsers default to landscape; URL and saved choice win',()=>{
+ const {isMobileUA,defaultLandscape}=orientation;
+ assert.equal(isMobileUA('Mozilla/5.0 (Linux; Android 14) Chrome/120 Mobile'),true);
+ assert.equal(isMobileUA('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari'),true);
+ assert.equal(isMobileUA('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120'),false);
+ assert.equal(isMobileUA('Mozilla/5.0 (Windows NT 10.0) Chrome/120',5),true,'touch laptop counts as mobile-ish');
+ // Priority: URL on > URL off > saved > mobile default.
+ assert.equal(defaultLandscape({urlOn:true,stored:'0',mobile:false}),true);
+ assert.equal(defaultLandscape({urlOff:true,stored:'1',mobile:true}),false);
+ assert.equal(defaultLandscape({stored:'0',mobile:true}),false,'an explicit saved off beats the mobile default');
+ assert.equal(defaultLandscape({stored:'1',mobile:false}),true);
+ assert.equal(defaultLandscape({mobile:true}),true,'no choice yet: phones get landscape offered');
+ assert.equal(defaultLandscape({mobile:false}),false,'desktop stays as before');
+});

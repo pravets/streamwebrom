@@ -12,6 +12,23 @@ export function orientationSupported() {
   return !!o && typeof o.lock === "function";
 }
 
+/** Phone/tablet browser: forced landscape makes sense there, not on desktop. */
+export function isMobileUA(ua = "", touchPoints = 0) {
+  return /Mobi|Android|iPhone|iPad/i.test(ua) || touchPoints > 1;
+}
+
+/**
+ * Resolve the initial landscape mode: the URL wins, then the saved choice;
+ * with neither, a mobile browser defaults to on (the user can still untick
+ * the prejoin checkbox). `stored` is the raw localStorage value or null.
+ */
+export function defaultLandscape({ urlOn = false, urlOff = false, stored = null, mobile = false } = {}) {
+  if (urlOn) return true;
+  if (urlOff) return false;
+  if (stored !== null) return stored === "1";
+  return mobile;
+}
+
 /** Lock to landscape. Resolves true on success; NotSupportedError,
  * SecurityError and friends resolve false instead of throwing. */
 export async function lockLandscape() {

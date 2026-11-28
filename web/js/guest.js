@@ -21,7 +21,7 @@ import { callGrid } from "./call-grid.js";
 import { roomTelemetry, metricText } from "./telemetry.js";
 import { immersive } from "./immersive.js";
 import { RoomAudio, pictureInPicture, effectiveDeafen } from "./room-audio.js";
-import { lockLandscape, unlockLandscape, installOrientationHint } from "./orientation.js";
+import { lockLandscape, unlockLandscape, installOrientationHint, isMobileUA, defaultLandscape } from "./orientation.js";
 import { screenAudioNotice, resumeCaptureAudio, stopScreenCapture } from "./devices.js";
 import { chooseScreen } from "./screen-share.js";
 import { installI18n, t, onLangChange } from "./i18n.js";
@@ -54,8 +54,14 @@ const flag = (...names) => names.some((n) => params.has(n) && truthy(params.get(
 const off = (...names) => names.some((n) => params.has(n) && ["0", "false", "off"].includes(params.get(n)));
 const storedFlag = (key) => { try { return localStorage.getItem(key) === "1"; } catch { return false; } };
 const saveFlag = (key, on) => { try { localStorage.setItem(key, on ? "1" : "0"); } catch {} };
-// Forced landscape (ticket #14): the URL wins over the saved swr.landscape choice.
-let landscapeMode = flag("landscape") ? true : off("landscape") ? false : storedFlag("swr.landscape");
+// Forced landscape (ticket #14): the URL wins over the saved swr.landscape
+// choice; with neither, a mobile browser defaults to on (ticket: offer the
+// fixed orientation on connect from a phone).
+const storedLandscape = (() => { try { return localStorage.getItem("swr.landscape"); } catch { return null; } })();
+let landscapeMode = defaultLandscape({
+  urlOn: flag("landscape"), urlOff: off("landscape"), stored: storedLandscape,
+  mobile: isMobileUA(navigator.userAgent, navigator.maxTouchPoints || 0),
+});
 const orientationHint = installOrientationHint($("#orientationHint"));
 const cinema = immersive($("#call"), $("#callFullscreen"), $("#exitFullscreen"), {
   // Android Chrome only allows the orientation lock inside fullscreen.
