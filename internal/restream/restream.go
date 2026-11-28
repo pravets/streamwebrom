@@ -398,9 +398,12 @@ var retryingPhrases = []string{"trying next address", "next address", "trying ag
 // DTS matches neither the phrases nor a destination URL and stays transient
 // too.
 func destinationFailure(line string) bool {
-	low := strings.ToLower(line)
+	// Phrases are matched on the line with destinations and credentials
+	// blanked out: a stream key that happens to contain "retrying" must not
+	// turn a real failure into a transient warning.
+	text := strings.ToLower(scrubSecrets(line))
 	for _, phrase := range retryingPhrases {
-		if strings.Contains(low, phrase) {
+		if strings.Contains(text, phrase) {
 			return false
 		}
 	}
@@ -413,7 +416,7 @@ func destinationFailure(line string) bool {
 		"slave muxer",
 		"all tee outputs failed",
 	} {
-		if strings.Contains(low, phrase) {
+		if strings.Contains(text, phrase) {
 			return true
 		}
 	}

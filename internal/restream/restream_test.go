@@ -172,6 +172,9 @@ func TestDestinationFailureClassifier(t *testing.T) {
 		"[tee @ 0x2] Slave muxer #0 failed: Error number -138 occurred, continuing with 1/2 slaves.",
 		"[tee @ 0x2] All tee outputs failed.",
 		"[tee] Unable to open srt://host:9000?streamid=abc: Connection refused",
+		// The retry phrases are matched with destinations blanked out, so a
+		// stream key containing "retrying" cannot make a real failure transient.
+		"[tee @ 0x2] Slave '[f=flv:onfail=ignore]rtmp://a.example/live/retrying': error opening: Connection refused",
 	}
 	for _, line := range failures {
 		if !destinationFailure(line) {
