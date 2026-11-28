@@ -4,7 +4,7 @@ import { moduleURL } from './module-url.mjs';
 
 // chat.js imports rtc.js, which reads location at module scope.
 globalThis.location = { search: '', hash: '' };
-const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow, messageKey, unreadAfterSeed, seenAfterRemove, unreadAfterRemove, mergeSeed } = await import(await moduleURL('chat.js'));
+const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow, messageKey, unreadAfterSeed, seenAfterRemove, unreadAfterRemove, mergeSeed, normalizeDmPolicy, dmAllowedByPolicy } = await import(await moduleURL('chat.js'));
 
 test('conversationKey is the sorted pair, symmetric and never the general key', () => {
   assert.equal(conversationKey('bob', 'ana'), conversationKey('ana', 'bob'));
@@ -182,4 +182,17 @@ test('a seed without dm support keeps the local dm history', () => {
   assert.deepEqual(rebuilt.get('ana|me').map((c) => c.id), ['d9']);
   // Pure: the input map is not mutated.
   assert.deepEqual(current.get('ana|me').map((c) => c.id), ['d1']);
+});
+
+test('the dm policy string is read in exactly one place', () => {
+  assert.equal(normalizeDmPolicy(undefined), 'all');
+  assert.equal(normalizeDmPolicy(''), 'all');
+  assert.equal(normalizeDmPolicy('host-only'), 'host-only');
+  assert.equal(normalizeDmPolicy('off'), 'off');
+  assert.equal(normalizeDmPolicy('bogus'), 'all', 'unknown values fall back to all');
+  assert.equal(dmAllowedByPolicy('off', 'host'), false);
+  assert.equal(dmAllowedByPolicy('host-only', 'host'), true);
+  assert.equal(dmAllowedByPolicy('host-only', 'guest'), false);
+  assert.equal(dmAllowedByPolicy('all', 'guest'), true);
+  assert.equal(dmAllowedByPolicy('', 'viewer'), false, 'viewers never receive dms');
 });

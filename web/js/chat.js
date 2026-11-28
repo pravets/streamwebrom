@@ -153,8 +153,22 @@ export function conversationKey(a, b) {
 }
 
 /** The other participant of a dm envelope; works for the sender's echo too. */
-export function dmPeer(m, myId) {
-  return m.peerId === myId ? m.to : m.peerId;
+// One reading of the dm policy string ("" and unknown values mean "all") for
+// every page: the guest composer, the tile buttons and the studio selector
+// must never disagree about what a policy allows.
+export function normalizeDmPolicy(policy) {
+  return policy === "host-only" || policy === "off" ? policy : "all";
+}
+// May a sender write to a peer with this role under this policy? The host
+// passes its own role as "host" and is allowed by every non-"off" policy.
+export function dmAllowedByPolicy(policy, peerRole) {
+  const pol = normalizeDmPolicy(policy);
+  if (pol === "off") return false;
+  if (pol === "host-only") return peerRole === "host";
+  return peerRole === "host" || peerRole === "guest";
+}
+
+export function dmPeer(m, myId) {  return m.peerId === myId ? m.to : m.peerId;
 }
 
 /** Conversation key of a "chat" or "dm" signalling envelope. */

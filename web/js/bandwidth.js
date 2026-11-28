@@ -8,6 +8,9 @@ export const PANEL_DEFAULTS = { quality: "720", fps: "30" };
 // studio camera so the "did somebody ask for this?" rule cannot drift.
 export const TUNING_PARAMS = ["bitrate", "vb", "quality", "height", "h", "fps", "framerate", "fr"];
 
+/** The hasParam probe for explicitQuality, built from a URLSearchParams. */
+export const explicitFromParams = (params) => () => TUNING_PARAMS.some((n) => params.has(n));
+
 /**
  * Did somebody explicitly ask for this quality? URL parameters, the director
  * panel or the sender's own panel all count; the shipped defaults do not,

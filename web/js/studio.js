@@ -4,9 +4,9 @@ import { roomTelemetry, metricText } from "./telemetry.js";
 import { relayMonitor } from "./relay-status.js";
 import { mountVdo } from "./vdo.js";
 import { immersive } from "./immersive.js";
-import { Compositor, AudioMixer, accentApplies, ACCENT_LAYOUTS, quickAccent } from "./compositor.js";
-import { explicitQuality, TUNING_PARAMS } from "./bandwidth.js";
-import { createChat, GENERAL } from "./chat.js";
+import { Compositor, AudioMixer, accentApplies, ACCENT_LAYOUTS, quickAccent, fitCover } from "./compositor.js";
+import { explicitQuality, explicitFromParams } from "./bandwidth.js";
+import { createChat, GENERAL, normalizeDmPolicy } from "./chat.js";
 import { listDevices, loadPrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain, QUALITIES, FPS } from "./devices.js";
 import { screenAudioNotice, stopScreenCapture } from "./devices.js";
 import { chooseScreen } from "./screen-share.js";
@@ -336,7 +336,7 @@ $("#addCam").onclick = async () => {
 async function addLocalCam(stream, name) {
   let slot=2; while (local.has("host-camera-"+slot)) slot++;
   const cameraSlot = !hostCamId ? "host-camera" : "host-camera-" + slot;
-  const id = await addLocal(stream, "camera", name, { stream: cameraSlot, videoKbps: kbpsFor(Number(prefs.quality)), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 128, explicit: explicitQuality(prefs, () => TUNING_PARAMS.some((n) => params.has(n))) });
+  const id = await addLocal(stream, "camera", name, { stream: cameraSlot, videoKbps: kbpsFor(Number(prefs.quality)), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 128, explicit: explicitQuality(prefs, explicitFromParams(params)) });
   if (id) sources.get(id).mirror = false;
   return id;
 }
@@ -566,7 +566,7 @@ function renderSourceSettings() {
   const fitSel = el("select", { "aria-label": t("studiojs.mediaFit") },
     el("option", { value: "contain", text: t("studiojs.fitContain"), "data-i18n": "studiojs.fitContain" }),
     el("option", { value: "cover", text: t("studiojs.fitCover"), "data-i18n": "studiojs.fitCover" }));
-  fitSel.value = state.fit?.[id] === "cover" ? "cover" : "contain";
+  fitSel.value = fitCover(state, id) ? "cover" : "contain";
   fitSel.onchange = () => setState({ fit: { ...(state.fit || {}), [id]: fitSel.value } });
   $("#sourceSettingsQuality").replaceChildren(...(s.kind === "camera" ? [sourceQuality(id,s)] : []), ...(s.kind === "media" ? [el("label",{},t("studiojs.mediaFit"),fitSel)] : []), el("label",{},t("studiojs.programVolume"),vol));
 }
@@ -589,7 +589,7 @@ function renderBackstage() {
     s.preview.onclick = () => openSourceSettings(id);
     s.preview.tabIndex = 0; s.preview.setAttribute("aria-label", t("studiojs.enlargeAria", { name: s.name }));
     s.preview.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSourceSettings(id); } };
-    const tile = el("div", { class: "tile" + (onStage(id) ? " stage" : "") + (progMuted ? " progmuted" : "") + (hidden ? " video-hidden" : "") + (s.kind === "media" && state.fit?.[id] === "cover" ? " fit-cover" : ""), "data-id": id, "data-kind": s.kind, "data-peer": s.local ? myId : s.owner },
+    const tile = el("div", { class: "tile" + (onStage(id) ? " stage" : "") + (progMuted ? " progmuted" : "") + (hidden ? " video-hidden" : "") + (s.kind === "media" && fitCover(state, id) ? " fit-cover" : ""), "data-id": id, "data-kind": s.kind, "data-peer": s.local ? myId : s.owner },
       s.preview,
       el("span", { class: "tile-latency", title: t("studiojs.rttTitle"), text: t("studiojs.rttPending") }),
       owner?.hand ? el("span", { class: "hand", text: "✋" }) : null,
@@ -761,8 +761,8 @@ const chatPanel = createChat({
   send: (m) => sig.send(m),
   myId: () => myId, myName: () => "Anfitrión",
   peers: () => [...peers.values()],
-  canDM: () => dmSupported && (state.dmPolicy || "all") !== "off",
-  policy: () => state.dmPolicy || "all",
+  canDM: () => dmSupported && normalizeDmPolicy(state.dmPolicy) !== "off",
+  policy: () => normalizeDmPolicy(state.dmPolicy),
   visible: () => !!$('[data-pane="chat"]')?.classList.contains("active") && !$("#studioRoot").classList.contains("panel-collapsed"),
   actionsFor: (c, key) => [
     key === GENERAL ? el("button", { class: "small act", title: t("studiojs.showOnScreen"), onclick: () => setState({ comment: state.comment?.id === c.id ? null : c }), text: "📺" }) : null,

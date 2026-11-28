@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { moduleURL } from './module-url.mjs';
-const { senderProfile, needsOutputSource, explicitQuality, explicitMemory, PANEL_DEFAULTS, TUNING_PARAMS } = await import(await moduleURL('bandwidth.js'));
+const { senderProfile, needsOutputSource, explicitQuality, explicitMemory, explicitFromParams, PANEL_DEFAULTS, TUNING_PARAMS } = await import(await moduleURL('bandwidth.js'));
 const { relayMessage } = await import(await moduleURL('relay-status.js'));
 
 test('room profiles cap camera rate/fps/raster in either orientation and preserve lower requests', () => {
@@ -63,7 +63,7 @@ test('the URL tuning knobs are declared once and wired as the explicit probe', (
   assert.deepEqual([...TUNING_PARAMS].sort(), ['bitrate', 'fps', 'fr', 'framerate', 'h', 'height', 'quality', 'vb']);
   // The pages inject "does the URL carry any of these?" as the probe; the
   // defaults alone must never look like intent.
-  const probe = (present) => () => TUNING_PARAMS.some((name) => present.includes(name));
+  const probe = (present) => explicitFromParams({ has: (n) => present.includes(n) });
   assert.equal(explicitQuality(PANEL_DEFAULTS, probe([])), false);
   for (const name of TUNING_PARAMS) assert.equal(explicitQuality(PANEL_DEFAULTS, probe([name])), true, name);
 });

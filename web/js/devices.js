@@ -12,6 +12,7 @@
 //   so whatever the camera exposes becomes a slider or switch.
 // - Mic gain is applied with a Web Audio GainNode only when != 100 %.
 import { $, el, toast, params } from "./rtc.js";
+import { makeFlag, makeOff } from "./url-params.js";
 import { PANEL_DEFAULTS } from "./bandwidth.js";
 import { applyEffect, effectActive, needsCamera, effectsPanel } from "./effects.js";
 import { attachNativeAudio } from "./native-audio.js";
@@ -34,9 +35,8 @@ export const FPS = ["60", "50", "30", "25", "24", "15", "10"];
 // Suggested video bitrate per height (kbps), close to what VDO.Ninja uses.
 export const kbpsFor = (h) => ({ 2160: 16000, 1440: 9000, 1080: 6000, 720: 2500, 540: 1800, 480: 1200, 360: 800, 240: 400 })[h] || 2500;
 
-const truthy = (v) => v === "" || v === "1" || v === "true" || v === "on";
-const flag = (...names) => names.some((n) => params.has(n) && truthy(params.get(n)));
-const off = (...names) => names.some((n) => params.has(n) && ["0", "false", "off"].includes(params.get(n)));
+const flag = makeFlag(params);
+const off = makeOff(params);
 
 /** Preferences, with VDO.Ninja-compatible URL parameters taking priority. */
 export function loadPrefs() {

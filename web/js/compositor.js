@@ -12,8 +12,12 @@ export const W = 1920, H = 1080;
 // meaning for a source that is already in that scene's line-up: accenting
 // someone who was never added to the scene must stay a no-op.
 export const ACCENT_LAYOUTS = ["pip", "sidebar", "spotlight", "solo"];
-export function accentApplies(layout, stage, featured) {
-  return !!featured && ACCENT_LAYOUTS.includes(layout) && (stage || []).includes(featured);
+
+// One reading of the per-source fit state ("cover" crops, anything else
+// letterboxes). The compositor, the studio tiles and the guest preview must
+// all agree, so the check lives here instead of three inline copies.
+export const fitCover = (state, id) => state?.fit?.[id] === "cover";
+export function accentApplies(layout, stage, featured) {  return !!featured && ACCENT_LAYOUTS.includes(layout) && (stage || []).includes(featured);
 }
 
 /** One-click backstage accent: returns a new scene state. Adds `id` to the
@@ -223,7 +227,7 @@ export class Compositor {
       const hidden = (st.hidden && st.hidden[id]) || s.camOff;
       // Screens and media letterbox by default; a media source can opt into
       // cover (crop) through the shared room state (state.fit[id] === "cover").
-      const mediaCover = s.kind === "media" && st.fit?.[id] === "cover";
+      const mediaCover = s.kind === "media" && fitCover(st, id);
       const ok = !hidden && (s.kind === "screen" || (s.kind === "media" && !mediaCover)
         ? drawContain(ctx, s.video, r)
         : drawCover(ctx, s.video, r, s.kind === "media" ? false : !!s.mirror));

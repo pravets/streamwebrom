@@ -13,9 +13,11 @@
 //   &landscape=1            lock the phone screen to landscape in fullscreen
 import { $, el, toast, params, api, Signal, publish, subscribe, levelMeter, staleRevision } from "./rtc.js";
 import { listDevices, loadPrefs, savePrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain } from "./devices.js";
-import { explicitQuality, explicitMemory, TUNING_PARAMS } from "./bandwidth.js";
+import { explicitQuality, explicitMemory, explicitFromParams } from "./bandwidth.js";
+import { makeFlag, makeOff } from "./url-params.js";
+import { fitCover } from "./compositor.js";
 import { remoteSnapshot, remoteStats, CAMCTL } from "./remote.js";
-import { createChat } from "./chat.js";
+import { createChat, normalizeDmPolicy, dmAllowedByPolicy } from "./chat.js";
 import { automaticRoute } from "./network.js";
 import { callGrid } from "./call-grid.js";
 import { roomTelemetry, metricText } from "./telemetry.js";
@@ -47,11 +49,10 @@ const roomAudio = new RoomAudio(blocked => $("#enableAudio")?.classList.toggle("
 $("#enableAudio").onclick = () => roomAudio.resume();
 const closePiP = pictureInPicture($("#floatingVideo"), () => $("#grid .tile.expanded video") || $('#grid .tile:not([data-id="me"]) video') || $('#grid [data-id="me"] video'), text => toast(text));
 const sig = new Signal();
-// Local copies of the devices.js URL flag pattern (that file stays untouched):
-// &name / &name=1 / &name=true / &name=on enable; &name=0|false|off disables.
-const truthy = (v) => v === "" || v === "1" || v === "true" || v === "on";
-const flag = (...names) => names.some((n) => params.has(n) && truthy(params.get(n)));
-const off = (...names) => names.some((n) => params.has(n) && ["0", "false", "off"].includes(params.get(n)));
+// Shared URL flag pattern (url-params.js): &name / &name=1 / &name=true /
+// &name=on enable; &name=0|false|off disables.
+const flag = makeFlag(params);
+const off = makeOff(params);
 const storedFlag = (key) => { try { return localStorage.getItem(key) === "1"; } catch { return false; } };
 const saveFlag = (key, on) => { try { localStorage.setItem(key, on ? "1" : "0"); } catch {} };
 // Forced landscape (ticket #14): the URL wins over the saved swr.landscape
@@ -128,10 +129,10 @@ const videoKbps = () => remoteKbps || Number(params.get("bitrate") || params.get
 const explicitMem = explicitMemory();
 function explicitNow() {
   if (explicitMem.on) return true;
-  if (explicitQuality(prefs, () => TUNING_PARAMS.some((n) => params.has(n)))) return true;
+  if (explicitQuality(prefs, explicitFromParams(params))) return true;
   return !!pub?.opts?.explicit;
 }
-const pubOpts = (name, sticky = !!pub?.opts?.explicit) => ({ kind: "camera", name, videoKbps: videoKbps(), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 96, explicit: sticky || explicitNow() });
+const pubOpts = (name, carriedExplicit = !!pub?.opts?.explicit) => ({ kind: "camera", name, videoKbps: videoKbps(), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 96, explicit: carriedExplicit || explicitNow() });
 
 let meterTimer, noDeviceNotice = false;
 function showMeter(stream) {
@@ -257,12 +258,12 @@ async function connectMedia(carriedExplicit = false) {
   connectingMedia = true;
   if (!hadMediaConnection) connectionStatus(t("guest.connectingMedia"), "guest.connectingMedia");
   try {
-    // Capture the sticky flag before dropping pub: a rate the guest panel or
+    // Capture the explicit flag before dropping pub: a rate the guest panel or
     // the director tuned must survive the republish that follows a reconnect.
     // resume() already dropped pub, so it passes the flag in explicitly.
-    const sticky = carriedExplicit || !!pub?.opts?.explicit;
+    const explicit = carriedExplicit || !!pub?.opts?.explicit;
     pub?.stop(); pub = null;
-    const fresh = await publish(sig, media, pubOpts($("#name").value, sticky));
+    const fresh = await publish(sig, media, pubOpts($("#name").value, explicit));
     if (generation !== mediaGeneration) { fresh.stop(); return; }
     pub = fresh;
     unwatch(pub.id); // A rejoin snapshot can still contain our old stable ID.
@@ -556,7 +557,7 @@ function updateHiddenCameras() {
     tile.classList.toggle("video-hidden", !!state.hidden?.[id]);
     // Media sources letterbox by default; the host can switch each one to
     // cover, and the guest preview must match the program (same shared state).
-    tile.classList.toggle("fit-cover", tile.dataset.kind === "media" && state.fit?.[id] === "cover");
+    tile.classList.toggle("fit-cover", tile.dataset.kind === "media" && fitCover(state, id));
   }
 }
 function updateStageBadge() {
@@ -788,10 +789,7 @@ document.addEventListener("keyup", (e) => { if (e.code === "Space" && ptt) { ptt
 function canDM(p) {
   if (!dmSupported) return false; // a server without the chat wave has no dm handler: a sent dm would vanish
   if (!p || p.id === myId) return false;
-  const pol = state.dmPolicy || "all";
-  if (pol === "off") return false;
-  if (pol === "host-only") return p.role === "host";
-  return p.role === "host" || p.role === "guest";
+  return dmAllowedByPolicy(state.dmPolicy, p.role);
 }
 const chatPanel = createChat({
   log: $("#chatlog"), switcher: $("#chatConvos"), input: $("#chatInput"), sendButton: $("#chatSend"),
@@ -800,7 +798,7 @@ const chatPanel = createChat({
   myId: () => myId, myName: () => $("#name").value.trim(),
   peers: () => [...peers.values()],
   canDM,
-  policy: () => state.dmPolicy || "all",
+  policy: () => normalizeDmPolicy(state.dmPolicy),
   visible: () => !$("#chat").classList.contains("hidden"),
   onUnread: (n) => $("#chatBtn").classList.toggle("on", n > 0),
   onMention: (c) => { if ($("#chat").classList.contains("hidden")) toast(t("guest.mentioned", { name: c.from })); },

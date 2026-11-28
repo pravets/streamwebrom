@@ -93,3 +93,12 @@ test('a featured source missing from the stage is re-added in one click', () => 
   assert.equal(next.featured, 'a');
   assert.equal(next.layout, 'spotlight', 'an accent layout is kept');
 });
+
+test('fitCover reads the per-source fit state in one place', async () => {
+  const { fitCover } = await import(await moduleURL('compositor.js'));
+  assert.equal(fitCover({ fit: { cam1: 'cover' } }, 'cam1'), true);
+  assert.equal(fitCover({ fit: { cam1: 'contain' } }, 'cam1'), false);
+  assert.equal(fitCover({ fit: { cam1: 'cover' } }, 'cam2'), false);
+  assert.equal(fitCover({}, 'cam1'), false);
+  assert.equal(fitCover(undefined, 'cam1'), false);
+});
