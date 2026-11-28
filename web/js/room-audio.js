@@ -38,6 +38,9 @@ export class RoomAudio {
   }
   notify() { this.onBlocked([...this.entries.values()].some(e => e.blocked)); }
   get(id) { return this.entries.get(id)?.audio; }
+  // Iterate every managed audio element. Callers must not walk their own peer
+  // list instead: a stream without a video tile still has room audio here.
+  forEach(fn) { for (const [id, e] of this.entries) fn(e.audio, id); }
   remove(id) {
     const e = this.entries.get(id); if (!e) return;
     this.entries.delete(id);

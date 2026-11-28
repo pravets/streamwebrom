@@ -57,3 +57,13 @@ test('host undeafen keeps the guest self-deafen choice; only room audio elements
  assert.equal(stream.tracks[0].enabled,true); // outgoing tracks are never touched
  playback.close();
 });
+test('forEach walks every managed audio element, even without a matching video tile',async()=>{
+ const playback=new RoomAudio();
+ const a=playback.add('cam-guest',new Stream([{kind:'audio'}]));
+ const b=playback.add('screen-share',new Stream([{kind:'audio'}]));await settle();
+ const seen=[];playback.forEach((audio,id)=>seen.push([id,audio]));
+ assert.deepEqual(seen.map(([id])=>id).sort(),['cam-guest','screen-share']);
+ playback.forEach((audio)=>{audio.muted=true});
+ assert.equal(a.muted,true);assert.equal(b.muted,true,'screen share audio follows the room mute too');
+ playback.close();
+});

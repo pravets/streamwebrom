@@ -157,7 +157,7 @@ async function startPreview() {
 }
 
 async function onPrefChange(p, what) {
-  if (what === "speaker") { for (const id of remotes.keys()) { const audio = roomAudio.get(id); if (audio) applySink(audio, p.speaker); } return; }
+  if (what === "speaker") { roomAudio.forEach((audio) => applySink(audio, p.speaker)); return; }
   if (what === "other") {
     mirrorPreview($("#preview"));
     const me = $('[data-id="me"] video'); if (me) mirrorPreview(me);
@@ -588,7 +588,9 @@ function sendMedia() { if (pub) sig.send({ type: "media", mic: micOn(), cam: cam
 // elements are muted here; outgoing tracks/media are never touched.
 function applyRoomMute() {
   const muted = effectiveDeafen(deafened, selfDeafened);
-  for (const id of remotes.keys()) { const audio = roomAudio.get(id); if (audio) audio.muted = muted; }
+  // Walk roomAudio itself, not remotes: a stream without a video tile (e.g.
+  // screen share) still plays room audio and must follow the mute.
+  roomAudio.forEach((audio) => { audio.muted = muted; });
 }
 function renderDeafenBtn() {
   const b = $("#deafenBtn");
