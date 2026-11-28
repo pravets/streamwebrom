@@ -47,6 +47,7 @@ const LAYOUTS = [["solo", "studiojs.layoutSolo"], ["split", "studiojs.layoutSpli
 const layoutLabel = (key) => t(key);
 
 let state = {};
+let dmSupported = false; // welcome state carries dmPolicy only on chat-wave servers
 let keys = {};
 let myId = "";
 let peers = new Map();       // peerId -> info
@@ -192,13 +193,16 @@ sig.on("reconnected", async (m) => {
 
 function onWelcome(m) {
   state = m.state; keys = m.keys || keys; myId = m.peerId || myId;
+  // A server without the chat wave omits dmPolicy from the state: hide the dm
+  // controls instead of offering actions the server would silently drop.
+  dmSupported = "dmPolicy" in (state || {});
   relayAccess = m.relayAccess || {}; renderRelayAccess();
   $("#bandwidthMode").value = state.bandwidth || "balanced";
   renderInvite();
   if (m.persistence) renderPersistence(m.persistence, true);
   peers = new Map((m.peers || []).map((p) => [p.id, p]));
   for (const s of m.streams || []) addRemote(s.id, s.kind, s.owner, "", s.revision);
-  chatPanel.seed(m.chat || [], m.dms || []);
+  chatPanel.seed(m.chat || [], dmSupported ? m.dms || [] : undefined);
   renderAll();
 }
 
@@ -438,6 +442,7 @@ function renderState() {
   $("#showTitle").value = state.title || "";
   $("#lobbyToggle").checked = !!state.lobby;
   $("#dmPolicy").value = state.dmPolicy || "all";
+  $("#dmPolicy").closest(".row").classList.toggle("hidden", !dmSupported);
   chatPanel.refresh();
   $$("#layouts button").forEach((b) => b.classList.toggle("active", b.dataset.l === sceneOf(editScene).layout));
   renderSceneBar();
@@ -756,12 +761,13 @@ const chatPanel = createChat({
   send: (m) => sig.send(m),
   myId: () => myId, myName: () => "Anfitrión",
   peers: () => [...peers.values()],
-  canDM: () => (state.dmPolicy || "all") !== "off",
+  canDM: () => dmSupported && (state.dmPolicy || "all") !== "off",
   policy: () => state.dmPolicy || "all",
   visible: () => !!$('[data-pane="chat"]')?.classList.contains("active") && !$("#studioRoot").classList.contains("panel-collapsed"),
   actionsFor: (c, key) => [
     key === GENERAL ? el("button", { class: "small act", title: t("studiojs.showOnScreen"), onclick: () => setState({ comment: state.comment?.id === c.id ? null : c }), text: "📺" }) : null,
-    el("button", { class: "small act", title: t("misc.chatDeleteTitle"), onclick: () => sig.send({ type: "chat-delete", target: c.id }), text: "🗑" }),
+    // chat-delete exists only on chat-wave servers; elsewhere the button would be a no-op.
+    dmSupported ? el("button", { class: "small act", title: t("misc.chatDeleteTitle"), onclick: () => sig.send({ type: "chat-delete", target: c.id }), text: "🗑" }) : null,
   ].filter(Boolean),
   onUnread: (n) => { const tab = $('#tabs [data-tab="chat"]'); if (n) tab.dataset.unread = n > 99 ? "99+" : String(n); else delete tab.dataset.unread; },
 });

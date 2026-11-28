@@ -4,7 +4,7 @@ import { moduleURL } from './module-url.mjs';
 
 // chat.js imports rtc.js, which reads location at module scope.
 globalThis.location = { search: '', hash: '' };
-const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow, messageKey, unreadAfterSeed, seenAfterRemove, unreadAfterRemove } = await import(await moduleURL('chat.js'));
+const { GENERAL, conversationKey, dmPeer, unreadAfter, unreadOnShow, messageKey, unreadAfterSeed, seenAfterRemove, unreadAfterRemove, mergeSeed } = await import(await moduleURL('chat.js'));
 
 test('conversationKey is the sorted pair, symmetric and never the general key', () => {
   assert.equal(conversationKey('bob', 'ana'), conversationKey('ana', 'bob'));
@@ -164,4 +164,22 @@ test('removing my own echo keeps the peer message unread', () => {
   assert.equal(unreadAfterRemove([], undefined, mine, 1, { id: 'a', peerId: 'ana' }), 0);
   // The author is optional: callers that do not pass it keep the old behaviour.
   assert.equal(unreadAfterRemove([], undefined, mine, 2), 1);
+});
+test('a seed without dm support keeps the local dm history', () => {
+  const current = new Map([
+    [GENERAL, [{ id: 'c1', peerId: 'ana' }]],
+    ['ana|me', [{ id: 'd1', peerId: 'ana', text: 'psst' }]],
+  ]);
+  // Old server: no dms key in the welcome at all -> undefined, not [].
+  const kept = mergeSeed(current, [{ id: 'c2', peerId: 'bob' }], undefined);
+  assert.deepEqual(kept.get(GENERAL).map((c) => c.id), ['c2'], 'the general chat is replaced');
+  assert.deepEqual(kept.get('ana|me').map((c) => c.id), ['d1'], 'the local dm history survives');
+  // A dm-capable server is authoritative: an empty dms list wipes ours.
+  const wiped = mergeSeed(current, [], []);
+  assert.equal(wiped.has('ana|me'), false);
+  // A dm-capable server rebuilds dm conversations from the snapshot.
+  const rebuilt = mergeSeed(current, [], [{ id: 'd9', peerId: 'ana', to: 'me' }]);
+  assert.deepEqual(rebuilt.get('ana|me').map((c) => c.id), ['d9']);
+  // Pure: the input map is not mutated.
+  assert.deepEqual(current.get('ana|me').map((c) => c.id), ['d1']);
 });

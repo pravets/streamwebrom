@@ -332,6 +332,9 @@ func (r *Room) Snapshot() State {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s, _ := cloneState(r.state)
+	// Always serialize dmPolicy: its presence tells DM-capable clients that
+	// this server understands direct messages; older servers omit the key.
+	s.DMPolicy = dmPolicyOf(s)
 	return s
 }
 

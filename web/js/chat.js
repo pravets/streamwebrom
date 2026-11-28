@@ -249,6 +249,25 @@ export function unreadAfterRemove(list, marker, myId, previous = 0, gone = null)
 }
 
 /**
+ * Pure core of seed(): rebuild the conversation map from a welcome snapshot.
+ * `dms === undefined` means the server has no direct-message support at all:
+ * its snapshot can never contain dms, so wiping ours would destroy local
+ * history for nothing — the existing dm conversations are kept instead.
+ */
+export function mergeSeed(histories, chat, dms) {
+  const next = new Map();
+  next.set(GENERAL, (chat || []).slice(-300));
+  if (dms === undefined) for (const [k, list] of histories) if (k !== GENERAL) next.set(k, list);
+  for (const c of dms || []) {
+    const key = conversationKey(c.peerId, c.to);
+    const list = next.get(key) || [];
+    list.push(c);
+    next.set(key, list);
+  }
+  return next;
+}
+
+/**
  * Wire a chat pane (log + composer + conversation switcher). Shared by the
  * studio tab and the guest drawer. opts:
  *   log, switcher, input, sendButton  DOM nodes
@@ -418,14 +437,9 @@ export function createChat(opts) {
   // reconnect neither loses them nor turns the whole history into "new".
   function seed(chat, dms) {
     setOpen(GENERAL); // the old draft stays with its own conversation
+    const merged = mergeSeed(histories, chat, dms);
     histories.clear();
-    histories.set(GENERAL, (chat || []).slice(-300));
-    for (const c of dms || []) {
-      const key = conversationKey(c.peerId, c.to);
-      const list = histories.get(key) || [];
-      list.push(c);
-      histories.set(key, list);
-    }
+    for (const [k, list] of merged) histories.set(k, list);
     unread = unreadAfterSeed(histories, lastSeen, myId(), openKey, visible(), unread);
     // What is on screen has been read: advance the marker so the next snapshot
     // does not badge messages the user is looking at right now.

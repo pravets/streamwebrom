@@ -36,6 +36,10 @@ let media = new MediaStream(), pub = null, screenPub = null, screenMedia = null;
 let screenAllowed = false, screenPending = false, screenOpening = false, screenAttempt = 0, screenNotice = "";
 const extraCams = new Map(); // pubId -> { pub, media }
 let state = {};
+// Set from each welcome: a server with the chat wave always serializes
+// state.dmPolicy; its absence means direct messages are unsupported and the
+// dm UI must stay hidden instead of silently losing messages.
+let dmSupported = false;
 const remotes = new Map(); // streamId -> { tile, sub, video }
 const remoteInfo = new Map(), remoteRetries = new Map();
 const peers = new Map(); // peerId -> {id,name,role}: chat conversations and dm targets
@@ -293,7 +297,8 @@ async function resume(m) {
   // Apply the snapshot before the first await: chat and peer events arriving
   // during publication must add to it, not be wiped by a late seed().
   peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
-  chatPanel.seed(m.chat || [], m.dms || []); // catch up on what we missed
+  dmSupported = "dmPolicy" in state; // state may be the merged previous one if this snapshot carried none
+  chatPanel.seed(m.chat || [], dmSupported ? m.dms || [] : undefined); // catch up on what we missed
   refreshDmButtons();
   // Clear only the old session before awaiting publication. A stream-added
   // received during negotiation belongs to the new session and must survive.
@@ -334,7 +339,8 @@ async function enter(m) {
   // Snapshot first, then await publication: messages and peers arriving
   // during connectMedia() must complement the snapshot, not be reset by it.
   peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
-  chatPanel.seed(m.chat || [], m.dms || []);
+  dmSupported = "dmPolicy" in (m.state || {});
+  chatPanel.seed(m.chat || [], dmSupported ? m.dms || [] : undefined);
   refreshDmButtons();
   await connectMedia();
   if (sig.closed) return;
@@ -772,6 +778,7 @@ document.addEventListener("keyup", (e) => { if (e.code === "Space" && ptt) { ptt
 // General room chat plus direct conversations. Policy: "all" lets guests
 // write to anyone, "host-only" only to a host, "off" disables dms entirely.
 function canDM(p) {
+  if (!dmSupported) return false; // a server without the chat wave has no dm handler: a sent dm would vanish
   if (!p || p.id === myId) return false;
   const pol = state.dmPolicy || "all";
   if (pol === "off") return false;

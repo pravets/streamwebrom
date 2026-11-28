@@ -251,6 +251,26 @@ func TestDMPolicyEmptyMeansAll(t *testing.T) {
 	}
 }
 
+func TestSnapshotAlwaysSerializesDMPolicy(t *testing.T) {
+	_, r, _, _, _ := dmFixture(t)
+	// Even a room saved before dm existed must advertise dm support: clients
+	// detect it by the mere presence of the dmPolicy key in the welcome state.
+	if err := r.Update(func(st *State) error { st.DMPolicy = ""; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(r.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["dmPolicy"] != "all" {
+		t.Fatalf("welcome state must carry dmPolicy=all, got %v", decoded["dmPolicy"])
+	}
+}
+
 func TestDMViewerAndLobbyRejected(t *testing.T) {
 	h, r, host, g1, _ := dmFixture(t)
 	ctx := context.Background()
