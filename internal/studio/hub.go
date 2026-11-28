@@ -98,6 +98,10 @@ func NewHub(ctx context.Context, o Options) *Hub {
 
 var roomIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,47}$`)
 
+// errStateUnchanged aborts a Room.Update without publishing a new state: a
+// no-op edit must not broadcast anything to the room.
+var errStateUnchanged = errors.New("state unchanged")
+
 // RefreshRoutes reconnects browsers so active sessions leave an exhausted
 // provider, while preserving stage slots for the normal rejoin grace period.
 func (h *Hub) RefreshRoutes() {
@@ -434,6 +438,8 @@ func (h *Hub) handle(ctx context.Context, p *Peer, m Msg) error {
 		r.addChat(c)
 		r.broadcast(Msg{Type: "chat", Comment: &c, PeerID: p.ID}, "")
 		return nil
+	case "dm":
+		return h.dm(p, m)
 	case "latency":
 		return h.latency(p, m.Value)
 	case "media":
@@ -474,6 +480,44 @@ func (h *Hub) handle(ctx context.Context, p *Peer, m Msg) error {
 		return fmt.Errorf("%s requires host", m.Type)
 	}
 	return h.hostAction(p, m)
+}
+
+// dm delivers a direct message to exactly one peer, plus an echo to the
+// sender so their UI can show the outgoing message. Viewers never take part
+// (sending or receiving); the lobby gate in handle already rejected waiting
+// peers. History lives in the room, keyed by the sorted pair of peer ids.
+func (h *Hub) dm(p *Peer, m Msg) error {
+	r := p.room
+	role := p.role()
+	if role == RoleViewer {
+		return Userf("dm_viewer", "Los espectadores no pueden enviar mensajes directos")
+	}
+	if m.To == "" || m.To == p.ID {
+		return Userf("dm_target_invalid", "Destinatario no válido")
+	}
+	c := Comment{ID: token(8), From: p.Name, Source: "dm", TS: time.Now().UnixMilli(), PeerID: p.ID, Role: role, To: m.To}
+	if m.Kind == "sticker" {
+		if !validSticker(m.Text) {
+			return Userf("dm_sticker_invalid", "Pegatina desconocida")
+		}
+		c.Sticker = m.Text
+	} else {
+		c.Text = limit(strings.TrimSpace(m.Text), 500)
+		if c.Text == "" {
+			return nil
+		}
+	}
+	// Policy, recipient and history append share one lock: neither a policy
+	// change nor a reconnect can land between the checks and the append.
+	if err := r.addDMChecked(c); err != nil {
+		return err
+	}
+	out := Msg{Type: "dm", Comment: &c, PeerID: p.ID, To: c.To}
+	if target := h.peerByID(r, m.To); target != nil {
+		target.Send(out)
+	}
+	p.Send(out) // echo for the sender's UI
+	return nil
 }
 
 func (h *Hub) join(p *Peer, m Msg) error {
@@ -527,12 +571,22 @@ func (h *Hub) join(p *Peer, m Msg) error {
 	if probe {
 		limit = 1
 	}
-	if len(r.peers)+len(r.waiting) >= limit {
+	// A rejoin with a valid pass takes over its own previous session, so that
+	// slot is free: a second tab must still be able to steal the pass back.
+	rejoin := role == RoleGuest && m.Rejoin != "" && r.passes[m.Rejoin]
+	replaceable := 0
+	if rejoin {
+		for _, old := range r.peers {
+			if old.pass == m.Rejoin {
+				replaceable++
+			}
+		}
+	}
+	if len(r.peers)+len(r.waiting)-replaceable >= limit {
 		r.mu.Unlock()
 		return errFull
 	}
 	p.room = r
-	rejoin := role == RoleGuest && m.Rejoin != "" && r.passes[m.Rejoin]
 	if rejoin {
 		p.pass = m.Rejoin
 	}
@@ -545,7 +599,27 @@ func (h *Hub) join(p *Peer, m Msg) error {
 		p.mu.Unlock()
 		r.peers[p.ID] = p
 	}
+	// One rejoin pass is one live session: a second join with the same pass
+	// (a reload racing its old socket, a second tab, or someone replaying a
+	// leaked pass) takes over, and the previous connection is told so. Without
+	// this the two sessions would fight over the dm history keyed by the pass.
+	var evicted []*Peer
+	if rejoin {
+		evicted = r.evictPassLocked(m.Rejoin, p.ID)
+		for _, old := range evicted {
+			old.replaced = true
+		}
+	}
 	r.mu.Unlock()
+
+	for _, old := range evicted {
+		// Do not revoke the pass: it now belongs to the fresh session. The
+		// client stops reconnecting when it sees "kicked", so the two ends do
+		// not ping-pong the pass between them.
+		old.Send(Msg{Type: "kicked"})
+		time.AfterFunc(200*time.Millisecond, old.close)
+		h.log.Info("rejoin pass taken over by a new session", "room", r.ID, "peer", old.ID, "new", p.ID)
+	}
 
 	if lobby {
 		p.Send(Msg{Type: "waiting", PeerID: p.ID})
@@ -622,6 +696,11 @@ func (h *Hub) welcome(p *Peer) {
 			defer p.Send(Msg{Type: "knock", PeerID: wp.ID, Name: wp.Name})
 		}
 		r.mu.RUnlock()
+	}
+	// After issuePass: a rejoin rebinds the guest's dm conversations to their
+	// fresh peer id, and the catch-up must see the rebound history.
+	if role != RoleViewer {
+		w.Dms = r.dmHistory(p.ID)
 	}
 	p.Send(w)
 	if role != RoleViewer {
@@ -1066,6 +1145,37 @@ func (h *Hub) hostAction(host *Peer, m Msg) error {
 			p.Send(Msg{Type: "request", Action: m.Action, Value: m.Value})
 		}
 		return nil
+	case "chat-delete": // moderation: remove one message by Comment.ID
+		// Idempotent by design: a double click or a client retry must not turn
+		// into an error modal for the moderator.
+		inChat, pair, ok := r.deleteComment(m.Target)
+		if ok {
+			if inChat {
+				r.broadcast(Msg{Type: "chat-deleted", ID: m.Target}, "")
+			} else {
+				for _, id := range pair {
+					if p := h.peerByID(r, id); p != nil {
+						p.Send(Msg{Type: "chat-deleted", ID: m.Target})
+					}
+				}
+			}
+		}
+		// A deleted message must not stay featured on the program output; a
+		// newer featured comment set meanwhile must survive. The cleanup runs
+		// even when the text already scrolled out of the history ring, where
+		// deleteComment finds nothing to remove. Skip the state broadcast
+		// entirely when this comment was not the featured one.
+		if err := r.Update(func(st *State) error {
+			if st.Comment == nil || st.Comment.ID != m.Target {
+				return errStateUnchanged
+			}
+			st.Comment = nil
+			return nil
+		}); err != nil && !errors.Is(err, errStateUnchanged) {
+			// The message is already gone: report the failure without undoing it.
+			h.log.Warn("chat-delete: featured comment not cleared", "room", r.ID, "id", m.Target, "err", err)
+		}
+		return nil
 	case "state":
 		return h.setState(r, m)
 	case "record":
@@ -1272,6 +1382,14 @@ func (h *Hub) setState(r *Room, m Msg) error {
 						return errors.New("too many hidden entries")
 					}
 					st.Hidden = hm
+				}
+			case "dmPolicy": // who may send direct messages: all | host-only | off
+				var pol string
+				if err = json.Unmarshal(v, &pol); err == nil {
+					if !validDMPolicy(pol) {
+						return errors.New("invalid dm policy")
+					}
+					st.DMPolicy = pol
 				}
 			default:
 				return fmt.Errorf("unknown state key %q", k)

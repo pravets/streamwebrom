@@ -4,6 +4,7 @@
 package studio
 
 import (
+	"cmp"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -55,6 +56,7 @@ type Comment struct {
 	Sticker string `json:"sticker,omitempty"`
 	PeerID  string `json:"peerId,omitempty"` // author, so clients can tell their own messages
 	Role    Role   `json:"role,omitempty"`   // author's role ("host" gets a badge)
+	To      string `json:"to,omitempty"`     // dm recipient peer id; empty for room chat
 }
 
 // Brand controls the look of the program output.
@@ -93,6 +95,9 @@ type State struct {
 	Hidden     map[string]bool    `json:"hidden"`     // stream id -> video hidden, audio kept
 	Bandwidth  string             `json:"bandwidth"`  // eco | balanced | quality; applies to camera/screen senders
 	Connection string             `json:"connection"` // local by default; cloudflare requires host/master authorization
+	// DMPolicy gates direct messages: all (default), host-only (guests may
+	// only write to a host) or off. Empty means all.
+	DMPolicy string `json:"dmPolicy,omitempty"`
 }
 
 // Scene is a saved layout + stage combination (one-click switching).
@@ -129,6 +134,8 @@ type Room struct {
 	publishing     map[string]bool
 	state          State
 	chat           []Comment
+	dms            map[string][]Comment // conversation key (sorted peer ids) -> history
+	dmPeerByPass   map[string]string    // rejoin pass -> last peer id, so dm history survives reconnects
 	emptyAt        time.Time
 	restream       *restream.Session
 	starting       bool // a go-live is being set up (guards against double start)
@@ -187,7 +194,7 @@ func newRoom(id, guestPassword string, lobby bool, title string) (*Room, Keys, e
 		viewKey: token(16), pushKey: token(20), inviteKey: token(16),
 		peers: map[string]*Peer{}, waiting: map[string]*Peer{}, passes: map[string]bool{}, streams: map[string]*sfu.Stream{},
 		emptyAt: time.Now(), participants: map[string]string{}, savedSources: map[string]sfu.Info{}, streamOwners: map[string]string{},
-		state: State{Title: title, Layout: "grid", Lobby: lobby, Connection: "local", Bandwidth: "balanced", Scenes: map[string]Scene{},
+		state: State{Title: title, Layout: "grid", Lobby: lobby, Connection: "local", Bandwidth: "balanced", DMPolicy: "all", Scenes: map[string]Scene{},
 			Labels: map[string]string{},
 			Brand:  Brand{Color: "#7c5cff", Background: "#0b0b12", Theme: "bubble", ShowNames: true}},
 	}
@@ -522,16 +529,160 @@ func (r *Room) close() {
 func (r *Room) addChat(c Comment) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.chat = append(r.chat, c)
-	if len(r.chat) > 200 {
-		r.chat = r.chat[len(r.chat)-200:]
-	}
+	r.chat = trimHistory(append(r.chat, c))
 }
 
 func (r *Room) history() []Comment {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]Comment(nil), r.chat...)
+}
+
+// maxHistory caps the room chat and every dm conversation.
+const maxHistory = 200
+
+// maxWelcomeDMs caps the catch-up history a reconnecting peer receives across
+// all of its conversations, so welcome does not grow with the room size.
+const maxWelcomeDMs = 500
+
+// trimHistory keeps the newest maxHistory comments.
+func trimHistory(list []Comment) []Comment {
+	if len(list) > maxHistory {
+		return list[len(list)-maxHistory:]
+	}
+	return list
+}
+
+// addDMChecked validates the policy, the recipient and stores the dm under a
+// single lock: neither a policy change nor a reconnect may land between the
+// check and the append.
+func (r *Room) addDMChecked(c Comment) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch dmPolicyOf(r.state) {
+	case "off":
+		return Userf("dm_disabled", "Los mensajes directos están desactivados en esta sala")
+	case "host-only":
+		if c.Role != RoleHost {
+			if host := r.peers[c.To]; host == nil || host.role() != RoleHost {
+				return Userf("dm_host_only", "Los invitados solo pueden escribir al anfitrión")
+			}
+		}
+	}
+	t := r.peers[c.To]
+	if t == nil {
+		return Userf("dm_target_unavailable", "Ese participante no puede recibir mensajes directos")
+	}
+	tr := t.role()
+	if tr != RoleHost && tr != RoleGuest {
+		return Userf("dm_target_unavailable", "Ese participante no puede recibir mensajes directos")
+	}
+	// A guest address is only live while its session still owns the rejoin
+	// pass: after a reconnect the old peer lingers in r.peers until pongWait,
+	// but its conversation already moved to the fresh id, so a dm here would
+	// be stored where nobody reads it.
+	if tr == RoleGuest && (t.pass == "" || r.dmPeerByPass[t.pass] != t.ID) {
+		return Userf("dm_target_unavailable", "Ese participante no puede recibir mensajes directos")
+	}
+	// The sender matters for the same reason: a replaced session keeps its
+	// socket for a moment and could still post into the conversation that was
+	// just rebound away from it.
+	if c.Role == RoleGuest {
+		s := r.peers[c.PeerID]
+		if s == nil || s.pass == "" || r.dmPeerByPass[s.pass] != s.ID {
+			return Userf("dm_session_stale", "Tu sesión ya no está activa en esta sala")
+		}
+	}
+	r.appendDMLocked(c)
+	return nil
+}
+
+// appendDMLocked appends one comment to its conversation and trims the oldest
+// messages over the cap. Callers hold r.mu.
+func (r *Room) appendDMLocked(c Comment) {
+	if r.dms == nil {
+		r.dms = map[string][]Comment{}
+	}
+	key := dmKey(c.PeerID, c.To)
+	r.dms[key] = trimHistory(append(r.dms[key], c))
+}
+
+// dmHistory returns the catch-up history of every conversation this peer takes
+// part in, oldest first, capped overall so welcome does not grow with the room.
+func (r *Room) dmHistory(peerID string) []Comment {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []Comment
+	for key, msgs := range r.dms {
+		if a, b, ok := dmKeyParts(key); ok && (a == peerID || b == peerID) {
+			out = append(out, msgs...)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b Comment) int { return cmp.Compare(a.TS, b.TS) })
+	if len(out) > maxWelcomeDMs {
+		out = out[len(out)-maxWelcomeDMs:]
+	}
+	return out
+}
+
+// deleteComment removes one message by id from the room chat or a dm
+// conversation. It reports where the message lived so the hub can notify
+// exactly the affected peers: everyone for chat, the pair for a dm.
+func (r *Room) deleteComment(id string) (inChat bool, pair [2]string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, c := range r.chat {
+		if c.ID == id {
+			r.chat = slices.Delete(r.chat, i, i+1)
+			return true, [2]string{}, true
+		}
+	}
+	for key, msgs := range r.dms {
+		for i, c := range msgs {
+			if c.ID == id {
+				r.dms[key] = slices.Delete(msgs, i, i+1)
+				if len(r.dms[key]) == 0 {
+					delete(r.dms, key)
+				}
+				a, b, _ := dmKeyParts(key)
+				return false, [2]string{a, b}, true
+			}
+		}
+	}
+	return false, [2]string{}, false
+}
+
+// rebindDMLocked moves a reconnecting guest's conversations from their old
+// peer id to the new one, so dm history follows the rejoin pass the way stage
+// slots do. Callers hold r.mu.
+func (r *Room) rebindDMLocked(oldID, newID string) {
+	for key, msgs := range r.dms {
+		a, b, ok := dmKeyParts(key)
+		if !ok || (a != oldID && b != oldID) {
+			continue
+		}
+		delete(r.dms, key)
+		if a == oldID {
+			a = newID
+		}
+		if b == oldID {
+			b = newID
+		}
+		for i := range msgs {
+			if msgs[i].PeerID == oldID {
+				msgs[i].PeerID = newID
+			}
+			if msgs[i].To == oldID {
+				msgs[i].To = newID
+			}
+		}
+		nk := dmKey(a, b)
+		merged := append(r.dms[nk], msgs...)
+		// Chronological merge: the cap must drop the oldest messages, never
+		// one that arrived on the new id before the rebind.
+		slices.SortStableFunc(merged, func(x, y Comment) int { return cmp.Compare(x.TS, y.TS) })
+		r.dms[nk] = trimHistory(merged)
+	}
 }
 
 var errFull = Userf("room_full", "room is full")
@@ -543,16 +694,47 @@ const maxPasses = 1000
 func (r *Room) issuePass(p *Peer) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// A replaced session is on its way out: it must neither keep nor be given a
+	// pass, otherwise its late welcome would rebind the pass (and the dm
+	// history) away from the session that just took it over.
+	if p.replaced {
+		p.pass = ""
+		return ""
+	}
 	if p.pass == "" || !r.passes[p.pass] {
 		if len(r.passes) >= maxPasses && !r.persistent {
 			r.passes = map[string]bool{}
 			r.participants = map[string]string{}
+			r.dmPeerByPass = map[string]string{}
 		}
 		p.pass = token(24)
 		r.passes[p.pass] = true
 	}
 	r.participants[p.pass] = p.Name
+	// A reconnect gets a fresh peer id: carry the dm conversations over.
+	if old := r.dmPeerByPass[p.pass]; old != "" && old != p.ID {
+		r.rebindDMLocked(old, p.ID)
+	}
+	if r.dmPeerByPass == nil {
+		r.dmPeerByPass = map[string]string{}
+	}
+	r.dmPeerByPass[p.pass] = p.ID
 	return p.pass
+}
+
+// evictPassLocked lists the live peers that still hold pass, excluding keep.
+// The caller releases r.mu before telling them and closing their sockets.
+func (r *Room) evictPassLocked(pass, keep string) []*Peer {
+	if pass == "" {
+		return nil
+	}
+	var out []*Peer
+	for id, old := range r.peers {
+		if id != keep && old.pass == pass {
+			out = append(out, old)
+		}
+	}
+	return out
 }
 
 // revokePass makes a kicked guest go through the lobby again.
@@ -560,6 +742,7 @@ func (r *Room) revokePass(p *Peer) {
 	r.mu.Lock()
 	delete(r.participants, p.pass)
 	delete(r.passes, p.pass)
+	delete(r.dmPeerByPass, p.pass)
 	p.pass = ""
 	r.mu.Unlock()
 }
