@@ -16,6 +16,9 @@ export const TUNING_PARAMS = ["bitrate", "vb", "quality", "height", "h", "fps", 
  */
 export function explicitQuality(prefs = {}, hasParam = () => false) {
   if (hasParam()) return true;
+  // The user touched the quality/fps selects: even a choice equal to the
+  // shipped default is intent, not "never asked".
+  if (prefs.tuned) return true;
   const quality = String(prefs.quality ?? PANEL_DEFAULTS.quality);
   const fps = String(prefs.fps ?? PANEL_DEFAULTS.fps);
   return quality !== PANEL_DEFAULTS.quality || fps !== PANEL_DEFAULTS.fps;

@@ -325,7 +325,11 @@ export async function renderPanel(root, prefs, onChange, opts = {}) {
     flipH: $("#dev-fliph", root).checked, flipV: $("#dev-flipv", root).checked,
   });
   const fire = (what) => { const p = read(); Object.assign(prefs, p); savePrefs(prefs); onChange(prefs, what); };
-  cam.onchange = q.onchange = fps.onchange = () => fire("video");
+  // Touching the quality/fps selects is explicit intent even when the chosen
+  // value equals the shipped default: the room bandwidth mode must not
+  // silently re-cap what the user just confirmed.
+  cam.onchange = () => fire("video");
+  q.onchange = fps.onchange = () => { prefs.tuned = true; fire("video"); };
   mic.onchange = () => fire("audio");
   gain.oninput = () => { gainLbl.textContent = gain.value + "%"; };
   gain.onchange = () => fire("audio");

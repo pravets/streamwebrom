@@ -54,6 +54,9 @@ test('explicitQuality treats panel overrides and URL params as intent, defaults 
   assert.equal(explicitQuality({}, has(true)), true);
   // Missing prefs fall back to the defaults, not to "explicit".
   assert.equal(explicitQuality(undefined, has(false)), false);
+  // Touching the panel marks prefs.tuned: even defaults are then intent.
+  assert.equal(explicitQuality({ quality: '720', fps: '30', tuned: true }), true);
+  assert.equal(explicitQuality({ tuned: true }, has(false)), true);
 });
 test('the URL tuning knobs are declared once and wired as the explicit probe', () => {
   // One list for the guest page and the studio camera, so the rule cannot drift.
