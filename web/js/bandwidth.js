@@ -21,6 +21,20 @@ export function explicitQuality(prefs = {}, hasParam = () => false) {
   return quality !== PANEL_DEFAULTS.quality || fps !== PANEL_DEFAULTS.fps;
 }
 
+/**
+ * Remembers explicit quality intent across reconnects. A director command or a
+ * panel change made mid-call lives only in the publication options, and a
+ * reconnect drops the publication before the flag can be read from it.
+ */
+export function explicitMemory() {
+  let on = false;
+  return {
+    mark() { on = true; },
+    get on() { return on; },
+    reset() { on = false; },
+  };
+}
+
 export function senderProfile(mode, opts = {}, settings = {}) {
   const raw = { videoKbps: opts.videoKbps || 4000, audioKbps: opts.audioKbps || 128, fps: opts.fps || 30, scale: 1 };
   // Explicit per-source tuning (director panel, guest panel, URL params) and

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { moduleURL } from './module-url.mjs';
-const { senderProfile, needsOutputSource, explicitQuality, PANEL_DEFAULTS, TUNING_PARAMS } = await import(await moduleURL('bandwidth.js'));
+const { senderProfile, needsOutputSource, explicitQuality, explicitMemory, PANEL_DEFAULTS, TUNING_PARAMS } = await import(await moduleURL('bandwidth.js'));
 const { relayMessage } = await import(await moduleURL('relay-status.js'));
 
 test('room profiles cap camera rate/fps/raster in either orientation and preserve lower requests', () => {
@@ -63,6 +63,14 @@ test('the URL tuning knobs are declared once and wired as the explicit probe', (
   const probe = (present) => () => TUNING_PARAMS.some((name) => present.includes(name));
   assert.equal(explicitQuality(PANEL_DEFAULTS, probe([])), false);
   for (const name of TUNING_PARAMS) assert.equal(explicitQuality(PANEL_DEFAULTS, probe([name])), true, name);
+});
+test('explicitMemory remembers director intent after the publication is dropped', () => {
+  const mem = explicitMemory();
+  assert.equal(mem.on, false);
+  mem.mark(); // director setBitrate mid-call
+  assert.equal(mem.on, true, 'the intent survives the loss of pub.opts');
+  mem.reset(); // leaving the room clears it
+  assert.equal(mem.on, false);
 });
 test('host receives early usage warning, countdown and local confirmation without claiming billing cap', () => {
   const st={provider:'cloudflare',warning:false,usageBytes:44000000000,estimatedBytes:94000000000,budgetBytes:900000000000};

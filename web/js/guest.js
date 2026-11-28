@@ -13,7 +13,7 @@
 //   &landscape=1            lock the phone screen to landscape in fullscreen
 import { $, el, toast, params, api, Signal, publish, subscribe, levelMeter, staleRevision } from "./rtc.js";
 import { listDevices, loadPrefs, savePrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain } from "./devices.js";
-import { explicitQuality, TUNING_PARAMS } from "./bandwidth.js";
+import { explicitQuality, explicitMemory, TUNING_PARAMS } from "./bandwidth.js";
 import { remoteSnapshot, remoteStats, CAMCTL } from "./remote.js";
 import { createChat } from "./chat.js";
 import { automaticRoute } from "./network.js";
@@ -113,8 +113,11 @@ const videoKbps = () => remoteKbps || Number(params.get("bitrate") || params.get
 // in charge, so a source that never asked for anything is still protected.
 // The decision is re-made on every publication: a panel choice made mid-call
 // only lives in the publication options (setBitrate sets opts.explicit), so a
-// reconnect would otherwise republish at the defaults and get capped.
+// reconnect would otherwise republish at the defaults and get capped. The
+// module-level memory keeps that intent even after `pub` is dropped.
+const explicitMem = explicitMemory();
 function explicitNow() {
+  if (explicitMem.on) return true;
   if (explicitQuality(prefs, () => TUNING_PARAMS.some((n) => params.has(n)))) return true;
   return !!pub?.opts?.explicit;
 }
@@ -408,6 +411,9 @@ async function remoteControl(action, v) {
       }
       const targetPub = extra?.pub || pub;
       if (targetPub) await targetPub.setBitrate(rate, Number(targetPrefs.fps) || 30);
+      // Remember the director's intent for the main camera: the publication
+      // options carrying opts.explicit are dropped on reconnect.
+      if (!extra) explicitMem.mark();
       if (!extra) savePrefs(prefs);
       toast(t("guest.hostAdjustedVideo", { quality: targetPrefs.quality, fps: targetPrefs.fps, rate }));
       return report("quality", { ...await remoteSnapshot(extra?.media || media, targetPrefs, { videoKbps: rate }), stream: targetPub?.id });
@@ -737,6 +743,7 @@ function leave(text) {
   // Closing signalling first avoids queued unpublish operations delaying the
   // server's leave cleanup when a TURN connection takes time to shut down.
   sig.close(); pub?.stop(); screenPub?.stop(); for (const x of extraCams.values()) x.pub.stop();
+  explicitMem.reset();
   clearInterval(meterTimer); gridLayout.destroy(); telemetry.destroy(); cinema.destroy(); orientationHint.destroy(); closePiP();
   for (const id of [...remoteInfo.keys()]) unwatch(id);
   roomAudio.close();
