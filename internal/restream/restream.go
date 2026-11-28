@@ -77,12 +77,12 @@ type Status struct {
 
 // Session is a running restream.
 type Session struct {
-	cancel  context.CancelFunc
-	done    chan struct{}
-	mu      sync.Mutex
-	status  Status
-	conns   []*net.UDPConn
-	removes []func()
+	cancel     context.CancelFunc
+	done       chan struct{}
+	mu         sync.Mutex
+	status     Status
+	conns      []*net.UDPConn
+	removes    []func()
 	log        *slog.Logger
 	stream     string
 	destFailed bool // a tee destination failed to open and will not recover
@@ -382,23 +382,38 @@ func scrubSecrets(line string) string {
 	return secretKV.ReplaceAllString(line, "$1=***")
 }
 
+// retryingPhrases announce another attempt on the same destination. libsrt
+// prints the address it gave up on and then connects to the next one, so the
+// diagnostic carries a destination URL while the stream actually recovers.
+var retryingPhrases = []string{"trying next address", "next address", "trying again", "retrying", "reconnecting"}
+
 // destinationFailure reports whether a diagnostic line describes a tee
 // destination that failed to open. onfail=ignore keeps the rest of the session
 // alive and tee does not reconnect the excluded slave, so such a failure never
-// recovers on its own: its indicator must stick for the whole session. A
-// warning such as a non-monotonic DTS matches neither the phrases nor a
-// destination URL and stays transient.
+// recovers on its own: its indicator must stick for the whole session.
+//
+// A URL alone does not prove a failed destination - libsrt warns "Connection to
+// srt://... failed, trying next address" and then succeeds - so a line that
+// announces another attempt stays transient. A warning such as a non-monotonic
+// DTS matches neither the phrases nor a destination URL and stays transient
+// too.
 func destinationFailure(line string) bool {
+	low := strings.ToLower(line)
+	for _, phrase := range retryingPhrases {
+		if strings.Contains(low, phrase) {
+			return false
+		}
+	}
 	if secretURL.MatchString(line) {
 		return true
 	}
 	for _, phrase := range []string{
-		"Unable to open",
-		"Cannot open connection",
-		"Slave muxer",
-		"All tee outputs failed",
+		"unable to open",
+		"cannot open connection",
+		"slave muxer",
+		"all tee outputs failed",
 	} {
-		if strings.Contains(line, phrase) {
+		if strings.Contains(low, phrase) {
 			return true
 		}
 	}

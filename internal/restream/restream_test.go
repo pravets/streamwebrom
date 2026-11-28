@@ -184,11 +184,41 @@ func TestDestinationFailureClassifier(t *testing.T) {
 		"[flv @ 0x4] Packet corrupt (stream = 0, dts = 51000)",
 		"[tcp @ 0x3] Connection to tcp://127.0.0.1:9?tcp_nodelay=0 failed: Error number -138 occurred",
 		"[AVIOContext @ 0x5] Statistics: 123 bytes written, 0 seeks",
+		// libsrt names the address it gave up on and then tries the next one:
+		// the URL alone is no proof that the destination is lost.
+		"[srt @ 0x6] Connection to srt://dual.example:9000?streamid=x failed (Connection refused), trying next address",
+		"[srt @ 0x6] Connection to srt://dual.example:9001?streamid=x failed (Timeout), trying next address",
 	}
 	for _, line := range transient {
 		if destinationFailure(line) {
 			t.Errorf("transient warning misclassified as destination failure: %q", line)
 		}
+	}
+}
+
+// A destination that only warned about one address is not lost: once media
+// flows again the indicator must clear, or a healthy restream stays "failed"
+// for the whole session.
+func TestRetryWarningDoesNotOutliveProgress(t *testing.T) {
+	s := &Session{log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), stream: "program"}
+	s.status.Live = true
+	s.readStats(strings.NewReader(
+		"[srt @ 0x6] Connection to srt://dual.example:9000?streamid=x failed (Connection refused), trying next address\n" +
+			"fps=30\nbitrate=4000k\nout_time=00:00:05\nprogress=continue\n"))
+	if st := s.Status(); st.LastError != "" {
+		t.Fatalf("retry warning pinned the indicator: %q", st.LastError)
+	}
+}
+
+// A genuinely excluded tee slave must still stick through progress=continue.
+func TestExcludedSlaveStillSticks(t *testing.T) {
+	s := &Session{log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), stream: "program"}
+	s.status.Live = true
+	s.readStats(strings.NewReader(
+		"[tee @ 0x1] Slave muxer #0 failed: Connection refused, continuing with 1/2 slaves.\n" +
+			"fps=30\nbitrate=4000k\nout_time=00:00:05\nprogress=continue\n"))
+	if st := s.Status(); st.LastError == "" {
+		t.Fatal("excluded tee slave stopped sticking")
 	}
 }
 
