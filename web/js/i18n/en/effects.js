@@ -30,4 +30,7 @@ export const en = {
   "effects.fillBlur": "Blur the whole video",
   "effects.pixelate": "Pixelate",
   "effects.strength": "Strength",
+  "effects.fit": "Fit to frame",
+  "effects.fitContain": "Fit (letterbox)",
+  "effects.fitCover": "Fill (crop)",
 };

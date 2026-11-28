@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { moduleURL } from './module-url.mjs';
-const { senderProfile, needsOutputSource } = await import(await moduleURL('bandwidth.js'));
+const { senderProfile, needsOutputSource, explicitQuality, explicitMemory, explicitFromParams, PANEL_DEFAULTS, TUNING_PARAMS } = await import(await moduleURL('bandwidth.js'));
 const { relayMessage } = await import(await moduleURL('relay-status.js'));
 
 test('room profiles cap camera rate/fps/raster in either orientation and preserve lower requests', () => {
@@ -28,6 +28,52 @@ test('OBS subscribes only the selected live scene, preserving hidden-source audi
   assert.equal(needsOutputSource({id:'a',kind:'camera'},state,null,'2'),false);
   assert.equal(needsOutputSource({id:'a',kind:'camera'},state,'a','2'),true);
   assert.equal(needsOutputSource({id:'program',kind:'program'},{stage:['program']},null,'1'),false);
+});
+test('explicit per-source tuning and local media override room bandwidth caps', () => {
+  const opts={videoKbps:6000,audioKbps:128,fps:30,explicit:true};
+  for (const size of [{width:1920,height:1080},{width:1080,height:1920}]) {
+    assert.deepEqual(senderProfile('balanced',opts,size),{videoKbps:6000,audioKbps:128,fps:30,scale:1});
+    assert.deepEqual(senderProfile('eco',opts,size),{videoKbps:6000,audioKbps:128,fps:30,scale:1});
+  }
+  // Without the explicit flag the caps still protect the room.
+  assert.equal(senderProfile('balanced',{videoKbps:6000,fps:30},{width:1080,height:1920}).videoKbps,1500);
+  // Local media files are content, not cameras: full requested quality.
+  assert.equal(senderProfile('balanced',{kind:'media',videoKbps:4000,fps:30},{width:1920,height:1080}).videoKbps,4000);
+  assert.equal(senderProfile('eco',{kind:'media',videoKbps:4000,fps:30},{width:1920,height:1080}).scale,1);
+});
+test('explicitQuality treats panel overrides and URL params as intent, defaults not', () => {
+  const has = (yes) => () => yes;
+  // Shipped defaults: nobody asked for anything, the room mode stays in charge.
+  assert.equal(explicitQuality({}, has(false)), false);
+  assert.equal(explicitQuality({ quality: '720', fps: '30' }), false);
+  assert.equal(explicitQuality({ quality: 720, fps: 30 }), false);
+  // The sender's own panel is explicit, exactly like the director's.
+  assert.equal(explicitQuality({ quality: '1080' }), true);
+  assert.equal(explicitQuality({ fps: '60' }), true);
+  // Invitation links stay explicit even with default prefs.
+  assert.equal(explicitQuality({}, has(true)), true);
+  // Missing prefs fall back to the defaults, not to "explicit".
+  assert.equal(explicitQuality(undefined, has(false)), false);
+  // Touching the panel marks prefs.tuned: even defaults are then intent.
+  assert.equal(explicitQuality({ quality: '720', fps: '30', tuned: true }), true);
+  assert.equal(explicitQuality({ tuned: true }, has(false)), true);
+});
+test('the URL tuning knobs are declared once and wired as the explicit probe', () => {
+  // One list for the guest page and the studio camera, so the rule cannot drift.
+  assert.deepEqual([...TUNING_PARAMS].sort(), ['bitrate', 'fps', 'fr', 'framerate', 'h', 'height', 'quality', 'vb']);
+  // The pages inject "does the URL carry any of these?" as the probe; the
+  // defaults alone must never look like intent.
+  const probe = (present) => explicitFromParams({ has: (n) => present.includes(n) });
+  assert.equal(explicitQuality(PANEL_DEFAULTS, probe([])), false);
+  for (const name of TUNING_PARAMS) assert.equal(explicitQuality(PANEL_DEFAULTS, probe([name])), true, name);
+});
+test('explicitMemory remembers director intent after the publication is dropped', () => {
+  const mem = explicitMemory();
+  assert.equal(mem.on, false);
+  mem.mark(); // director setBitrate mid-call
+  assert.equal(mem.on, true, 'the intent survives the loss of pub.opts');
+  mem.reset(); // leaving the room clears it
+  assert.equal(mem.on, false);
 });
 test('host receives early usage warning, countdown and local confirmation without claiming billing cap', () => {
   const st={provider:'cloudflare',warning:false,usageBytes:44000000000,estimatedBytes:94000000000,budgetBytes:900000000000};

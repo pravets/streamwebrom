@@ -1391,6 +1391,22 @@ func (h *Hub) setState(r *Room, m Msg) error {
 					}
 					st.DMPolicy = pol
 				}
+			case "fit": // media sources: letterbox (contain) or crop (cover) per stream
+				var fm map[string]string
+				if err = json.Unmarshal(v, &fm); err == nil {
+					if len(fm) > 200 {
+						return errors.New("too many fit entries")
+					}
+					for id, mode := range fm {
+						if !streamIDRe.MatchString(id) {
+							return fmt.Errorf("invalid fit stream id %q", id)
+						}
+						if mode != "contain" && mode != "cover" {
+							return fmt.Errorf("fit for %s must be contain or cover", id)
+						}
+					}
+					st.Fit = fm
+				}
 			default:
 				return fmt.Errorf("unknown state key %q", k)
 			}

@@ -388,7 +388,7 @@ export async function publish(sig, media, opts = {}) {
       await senders[kind].replaceTrack(track || null);
       return true;
     },
-    async setBitrate(videoKbps, fps) { Object.assign(opts, { videoKbps, fps: fps || opts.fps }); await retune(); },
+    async setBitrate(videoKbps, fps) { Object.assign(opts, { videoKbps, fps: fps || opts.fps, explicit: true }); await retune(); },
   };
 }
 

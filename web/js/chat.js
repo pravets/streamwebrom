@@ -1,8 +1,9 @@
 // Shared chat for the studio and the guest page: messages with time, host
 // badge, links and @mentions, big emoji-only messages, an emoji picker (with
-// recents) and stickers.
+// recents) and stickers. Also the conversation layer: the room-wide "General"
+// chat plus one direct conversation per peer, with unread badges.
 import { el } from "./rtc.js";
-import { t } from "./i18n.js";
+import { t, onLangChange } from "./i18n.js";
 import { STICKERS, stickerById } from "./stickers.js";
 
 // Category names are i18n keys, resolved when the picker renders so a language
@@ -139,4 +140,329 @@ export function mountComposer(row, input, send) {
     close();
   };
   return { send: doSend, close };
+}
+
+// ---------- conversations: general chat + direct messages ----------
+
+/** Conversation key of the room-wide chat. */
+export const GENERAL = "general";
+
+/** Sorted pair of peer ids: both sides of a dm share one key (server parity). */
+export function conversationKey(a, b) {
+  return a < b ? a + "|" + b : b + "|" + a;
+}
+
+/** The other participant of a dm envelope; works for the sender's echo too. */
+// One reading of the dm policy string ("" and unknown values mean "all") for
+// every page: the guest composer, the tile buttons and the studio selector
+// must never disagree about what a policy allows.
+export function normalizeDmPolicy(policy) {
+  return policy === "host-only" || policy === "off" ? policy : "all";
+}
+// May a sender write to a peer with this role under this policy? The host
+// passes its own role as "host" and is allowed by every non-"off" policy.
+export function dmAllowedByPolicy(policy, peerRole) {
+  const pol = normalizeDmPolicy(policy);
+  if (pol === "off") return false;
+  if (pol === "host-only") return peerRole === "host";
+  return peerRole === "host" || peerRole === "guest";
+}
+
+export function dmPeer(m, myId) {  return m.peerId === myId ? m.to : m.peerId;
+}
+
+/** Conversation key of a "chat" or "dm" signalling envelope. */
+export function messageKey(m) {
+  return m.type === "dm" ? conversationKey(m.peerId, m.to) : GENERAL;
+}
+
+/**
+ * Unread reducer. state maps conversation key -> count; m is a "chat" or "dm"
+ * signalling envelope. A message counts for its conversation unless that
+ * conversation is open and actually visible (a closed drawer or an inactive
+ * tab never marks it read) or the message is my own echo. Pure: returns a new
+ * object and never mutates the input.
+ */
+export function unreadAfter(state, m, openKey, myId, visible = true) {
+  const key = messageKey(m);
+  if (visible && key === openKey) return state;
+  if (myId && m.comment && m.comment.peerId === myId) return state;
+  return { ...state, [key]: (state[key] || 0) + 1 };
+}
+
+/**
+ * Unread counters to rebuild after a reconnect, when the server history
+ * replaces the local one. `seen` maps conversation key -> id of the last
+ * message the user actually looked at: everything newer is unread, my own
+ * messages never count, and the open visible conversation is read at once.
+ * A conversation with no known read point (the first welcome of this page,
+ * or a dm never opened) is not badged, so the whole history cannot show up as
+ * new. If the read marker was already trimmed out of the 300-message window,
+ * the retained history counts as unread — there is no server-side read state.
+ * Pure: returns a new object.
+ */
+export function unreadAfterSeed(histories, seen, myId, openKey, visible = true, previous = {}) {
+  const out = {};
+  for (const [key, list] of histories) {
+    if (!seen.has(key)) {
+      // This client never recorded a read marker here. Keep the count it had
+      // already tracked (a dm that arrived while the pane was hidden), instead
+      // of wiping the badge or turning the whole restored history into "new".
+      const tracked = previous[key] || 0;
+      if (tracked && !(visible && key === openKey)) out[key] = tracked;
+      continue;
+    }
+    const at = list.findIndex((c) => c.id && c.id === seen.get(key));
+    const fresh = (at < 0 ? list : list.slice(at + 1)).filter((c) => !(myId && c.peerId === myId));
+    if (!fresh.length) continue;
+    if (visible && key === openKey) continue;
+    out[key] = fresh.length;
+  }
+  return out;
+}
+
+/**
+ * Badge state after the pane shows `key`. Visible pane: the conversation is
+ * read, so its counter drops. Hidden pane: the counter stays until the user
+ * actually looks at it. Pure: returns a new object.
+ */
+export function unreadOnShow(state, key, visible = true) {
+  if (!visible) return state;
+  if (!(key in state)) return state;
+  const next = { ...state };
+  delete next[key];
+  return next;
+}
+
+/**
+ * Read marker after `id` disappears from `list` at index `i`. The marker must
+ * never outlive the message it points at: otherwise the next snapshot finds no
+ * marker and badges already-read history. Step back to the message before it,
+ * or return null so the tracked counter is kept instead. Pure.
+ */
+export function seenAfterRemove(marker, id, list, i) {
+  if (marker !== id) return marker;
+  const previous = list[i - 1];
+  return previous && previous.id ? previous.id : null;
+}
+
+/**
+ * Badge count after `gone` was removed from `list`. A badge must not outlive the
+ * message it counted: with a read marker the count is recomputed from what is
+ * left, and without one the tracked counter loses the removed message — but
+ * only when that message was someone else's. Removing my own echo never made
+ * anyone read the peer's unread message, so the counter stays. Pure.
+ */
+export function unreadAfterRemove(list, marker, myId, previous = 0, gone = null) {
+  if (marker) {
+    const at = list.findIndex((c) => c.id && c.id === marker);
+    return (at < 0 ? list : list.slice(at + 1)).filter((c) => !(myId && c.peerId === myId)).length;
+  }
+  if (gone && myId && gone.peerId === myId) return Math.max(0, previous);
+  return Math.max(0, previous - 1);
+}
+
+/**
+ * Pure core of seed(): rebuild the conversation map from a welcome snapshot.
+ * `dms === undefined` means the server has no direct-message support at all:
+ * its snapshot can never contain dms, so wiping ours would destroy local
+ * history for nothing — the existing dm conversations are kept instead.
+ */
+export function mergeSeed(histories, chat, dms) {
+  const next = new Map();
+  next.set(GENERAL, (chat || []).slice(-300));
+  if (dms === undefined) for (const [k, list] of histories) if (k !== GENERAL) next.set(k, list);
+  for (const c of dms || []) {
+    const key = conversationKey(c.peerId, c.to);
+    const list = next.get(key) || [];
+    list.push(c);
+    next.set(key, list);
+  }
+  return next;
+}
+
+/**
+ * Wire a chat pane (log + composer + conversation switcher). Shared by the
+ * studio tab and the guest drawer. opts:
+ *   log, switcher, input, sendButton  DOM nodes
+ *   send(msg)          signalling send
+ *   myId(), myName()   getters (the peer id changes on reconnect)
+ *   peers()            [{id,name,role}] currently in the room
+ *   canDM(peer)        page policy: may I write to this peer?
+ *   policy()           "all" | "host-only" | "off" ("" means all)
+ *   actionsFor(c,key)  optional per-message buttons (show on screen, delete)
+ *   onUnread(total)    badge callback (tab or drawer button)
+ *   onMention(c)       optional mention notification
+ *   offNote            optional node shown while dms are off
+ *   visible()          is the pane on screen right now? (drawer open / tab
+ *                      active) unread only skips the open conversation when
+ *                      the user can actually see it; defaults to always true
+ */
+export function createChat(opts) {
+  const { log, switcher, input, sendButton, send, myId, myName, peers, canDM, policy, actionsFor, onUnread, onMention, offNote, visible = () => true } = opts;
+  const histories = new Map(); // key -> [comment]
+  const drafts = new Map(); // key -> unsent composer text, kept per conversation
+  const lastSeen = new Map(); // key -> id of the last message the user actually saw
+  let openKey = GENERAL;
+  let unread = {};
+  const total = () => Object.values(unread).reduce((a, b) => a + b, 0);
+  const markSeen = (key) => {
+    const list = histories.get(key);
+    const last = list && list[list.length - 1];
+    if (last && last.id) lastSeen.set(key, last.id);
+  };
+  const peerOf = (key) => key.split("|").find((id) => id !== myId()) || "";
+  const nameOf = (id) => {
+    const p = peers().find((x) => x.id === id);
+    if (p) return p.name;
+    for (const list of histories.values()) for (const c of list) if (c.peerId === id) return c.from;
+    return id;
+  };
+  const node = (c, key) => {
+    const n = chatMessage(c, { myId: myId(), myName: myName(), actions: actionsFor ? actionsFor(c, key) : [] });
+    n.dataset.cid = c.id;
+    return n;
+  };
+  // Switching conversations — including the automatic fallback when the
+  // policy changes — must never carry a draft into another conversation:
+  // each one keeps its own unsent text until it is sent or edited away.
+  const setOpen = (key) => {
+    if (input.value) drafts.set(openKey, input.value); else drafts.delete(openKey);
+    openKey = key;
+    input.value = drafts.get(key) || "";
+  };
+  // May I write to this dm right now? The peer must still be in the room and
+  // the page policy (canDM) must allow it; history stays readable regardless.
+  const dmAllowed = (key) => {
+    const peer = peers().find((p) => p.id === peerOf(key));
+    return policy() !== "off" && !!peer && canDM(peer);
+  };
+  const composerRow = input.parentElement;
+  const composer = mountComposer(composerRow, input, (x) => {
+    if (openKey === GENERAL) {
+      send(x.sticker ? { type: "chat", kind: "sticker", text: x.sticker } : { type: "chat", text: x.text });
+    } else {
+      // Re-check at send time: the policy can change while the user types.
+      const to = peerOf(openKey);
+      if (!to || !dmAllowed(openKey)) return;
+      send(x.sticker ? { type: "dm", to, kind: "sticker", text: x.sticker } : { type: "dm", to, text: x.text });
+    }
+    drafts.delete(openKey);
+  });
+  sendButton.onclick = composer.send;
+  input.addEventListener("keydown", (e) => e.key === "Enter" && !e.isComposing && composer.send());
+
+  function renderSwitcher() {
+    const me = myId();
+    const keys = new Set();
+    for (const p of peers()) if (p.id !== me && canDM(p)) keys.add(conversationKey(me, p.id));
+    for (const key of histories.keys()) if (key !== GENERAL) keys.add(key); // keep history of peers who left
+    const btn = (key, label) => {
+      const n = unread[key] || 0;
+      return el("button", { type: "button", class: "small" + (key === openKey ? " on" : ""), onclick: () => open(key) },
+        label, n ? el("span", { class: "badge", text: n > 99 ? "99+" : String(n) }) : null);
+    };
+    const dmKeys = [...keys].sort((a, b) => nameOf(peerOf(a)).localeCompare(nameOf(peerOf(b))));
+    switcher.replaceChildren(btn(GENERAL, t("misc.chatGeneral")), ...dmKeys.map((key) => btn(key, nameOf(peerOf(key)))));
+  }
+  function renderLog() {
+    log.replaceChildren(...(histories.get(openKey) || []).map((c) => node(c, openKey)));
+    log.scrollTop = log.scrollHeight;
+  }
+  function syncComposer() {
+    // "off" disables direct messages only: the general chat keeps working.
+    // A forbidden (or departed) peer keeps its history readable, but the
+    // composer follows canDM — not just the "off" policy — so a host-only
+    // room never offers a guest-to-guest composer from a saved conversation.
+    const off = openKey !== GENERAL && !dmAllowed(openKey);
+    composerRow.classList.toggle("hidden", off);
+    if (offNote) offNote.classList.toggle("hidden", !off);
+  }
+  function refresh() {
+    // A policy change can forbid the open conversation: fall back to general.
+    if (openKey !== GENERAL) {
+      const other = peers().find((p) => p.id === peerOf(openKey));
+      if (policy() === "off" || (other && !canDM(other))) {
+        setOpen(GENERAL);
+        // The pane is on screen with the general chat open, so its badge must
+        // not survive the automatic switch, and the read marker must follow:
+        // otherwise the next snapshot sees a stale marker and badges what the
+        // user is looking at. A hidden pane keeps the counter until the user
+        // actually looks at it.
+        unread = unreadOnShow(unread, GENERAL, visible());
+        if (visible()) markSeen(GENERAL);
+        renderLog();
+      }
+    }
+    renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
+  }
+  function open(key) {
+    setOpen(key);
+    unread = unreadOnShow(unread, key);
+    if (visible()) markSeen(key);
+    renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
+  }
+  function receive(m) {
+    const c = m.comment;
+    if (!c) return;
+    const key = messageKey(m);
+    const list = histories.get(key) || [];
+    list.push(c);
+    if (list.length > 300) list.splice(0, list.length - 300);
+    histories.set(key, list);
+    const n = node(c, key);
+    if (key === openKey) appendChat(log, n);
+    unread = unreadAfter(unread, m, openKey, myId(), visible());
+    if (key === openKey && visible()) markSeen(key);
+    renderSwitcher(); if (onUnread) onUnread(total());
+    if (n.dataset.mention && c.peerId !== myId() && onMention) onMention(c);
+  }
+  function remove(id) {
+    for (const [key, list] of histories) {
+      const i = list.findIndex((c) => c.id === id);
+      if (i < 0) continue;
+      // The author is needed after the splice: my own echo must not consume
+      // the badge of a peer message that is still unread.
+      const gone = list[i];
+      list.splice(i, 1);
+      // The read marker must not survive the message it pointed at: otherwise
+      // the next snapshot looks like "marker gone" and badges already-read
+      // history.
+      if (lastSeen.has(key)) {
+        const next = seenAfterRemove(lastSeen.get(key), id, list, i);
+        if (next) lastSeen.set(key, next);
+        else lastSeen.delete(key);
+      }
+      // Recount the badge from what is actually left, so removing the only
+      // unread dm clears it instead of keeping a count nothing stands for.
+      if (unread[key] && !(visible() && key === openKey)) {
+        const n = unreadAfterRemove(list, lastSeen.get(key), myId(), unread[key], gone);
+        const next = { ...unread };
+        if (n > 0) next[key] = n;
+        else delete next[key];
+        unread = next;
+        if (onUnread) onUnread(total());
+      }
+    }
+    log.querySelector(`[data-cid="${CSS.escape(id)}"]`)?.remove();
+  }
+  // welcome/reconnect: the server history is authoritative and replaces ours.
+  // Unread counters are rebuilt from what the user had already seen, so a
+  // reconnect neither loses them nor turns the whole history into "new".
+  function seed(chat, dms) {
+    setOpen(GENERAL); // the old draft stays with its own conversation
+    const merged = mergeSeed(histories, chat, dms);
+    histories.clear();
+    for (const [k, list] of merged) histories.set(k, list);
+    unread = unreadAfterSeed(histories, lastSeen, myId(), openKey, visible(), unread);
+    // What is on screen has been read: advance the marker so the next snapshot
+    // does not badge messages the user is looking at right now.
+    if (visible()) markSeen(openKey);
+    renderLog(); renderSwitcher(); syncComposer(); if (onUnread) onUnread(total());
+  }
+  // The switcher is rebuilt from scratch, so a language change relabels the
+  // General tab and the dm names without touching the message log.
+  onLangChange(() => renderSwitcher());
+  renderSwitcher(); syncComposer();
+  return { seed, receive, remove, open, refresh, focus: () => open(openKey), openDM: (peerId) => open(conversationKey(myId(), peerId)), unreadTotal: total };
 }

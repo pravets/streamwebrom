@@ -202,6 +202,61 @@ test('disabling room persistence removes durable identity while retaining sessio
   try {const s=signal(),ws=await connected(s);ws.receive({type:'room-persistent',persistent:true});ws.receive({type:'room-persistent',persistent:false});assert.equal(persistent.size,0);assert.equal(storage.get('swr.rejoin.test-room'),'pass')} finally {delete globalThis.localStorage}
 });
 
+test('explicit bitrate tuning lifts the room bandwidth caps for that source',async t=>{
+  const applied=[];
+  class Sender {
+    constructor(kind){this.kind=kind;this.track={kind,getSettings:()=>({width:1080,height:1920})};}
+    getParameters(){return {encodings:[{}]}}
+    async setParameters(p){applied.push({kind:this.kind,p});}
+  }
+  class Peer extends EventTarget {
+    connectionState='connected';iceGatheringState='complete';localDescription={type:'offer',sdp:''};
+    addTransceiver(track){return {sender:new Sender(track.kind),setCodecPreferences(){}};}
+    async createOffer(){return this.localDescription} async setLocalDescription(){} async setRemoteDescription(){} close(){this.connectionState='closed'}
+  }
+  globalThis.RTCPeerConnection=Peer;globalThis.MediaStream=class {};globalThis.RTCRtpSender={getCapabilities:()=>null};
+  t.after(()=>{delete globalThis.RTCPeerConnection;delete globalThis.MediaStream;delete globalThis.RTCRtpSender});
+  const s=signal(),ws=await connected(s);s.trickle=true;s.bandwidthMode='balanced';
+  s.request=async()=>({stream:'camera',sdp:{type:'answer',sdp:''}});
+  const p=await publish(s,{getTracks:()=>[{kind:'video'}]},{videoKbps:6000,fps:30});
+  const first=applied.filter(a=>a.kind==='video').at(-1).p;
+  assert.equal(first.encodings[0].maxBitrate,1500*1000,'balanced caps apply before explicit tuning');
+  assert.equal(first.encodings[0].maxFramerate,24);
+  await p.setBitrate(6000,30);
+  const tuned=applied.filter(a=>a.kind==='video').at(-1).p;
+  assert.equal(tuned.encodings[0].maxBitrate,6000*1000,'director/guest tuning must not be silently capped');
+  assert.equal(tuned.encodings[0].maxFramerate,30);
+  assert.equal(tuned.encodings[0].scaleResolutionDownBy,1);
+  p.stop();
+});
+test('a republish keeps the explicit tuning that setBitrate turned on',async t=>{
+  const applied=[];
+  class Sender {
+    constructor(kind){this.kind=kind;this.track={kind,getSettings:()=>({width:1080,height:1920})};}
+    getParameters(){return {encodings:[{}]}}
+    async setParameters(p){applied.push({kind:this.kind,p});}
+  }
+  class Peer extends EventTarget {
+    connectionState='connected';iceGatheringState='complete';localDescription={type:'offer',sdp:''};
+    addTransceiver(track){return {sender:new Sender(track.kind),setCodecPreferences(){}};}
+    async createOffer(){return this.localDescription} async setLocalDescription(){} async setRemoteDescription(){} close(){this.connectionState='closed'}
+  }
+  globalThis.RTCPeerConnection=Peer;globalThis.MediaStream=class {};globalThis.RTCRtpSender={getCapabilities:()=>null};
+  t.after(()=>{delete globalThis.RTCPeerConnection;delete globalThis.MediaStream;delete globalThis.RTCRtpSender});
+  const s=signal(),ws=await connected(s);s.trickle=true;s.bandwidthMode='balanced';
+  s.request=async()=>({stream:'camera',sdp:{type:'answer',sdp:''}});
+  const media={getTracks:()=>[{kind:'video'}]};
+  const first=await publish(s,media,{videoKbps:6000,fps:30});
+  assert.equal(applied.filter(a=>a.kind==='video').at(-1).p.encodings[0].maxBitrate,1500*1000,'a publication that asked for nothing is still capped');
+  await first.setBitrate(6000,30);
+  // A reconnect republishes with the old publication options: the explicit
+  // flag the panel/director tuning set must travel with them.
+  const again=await publish(s,media,first.opts);
+  assert.equal(again.opts.explicit,true,'the explicit flag survives in the options');
+  assert.equal(applied.filter(a=>a.kind==='video').at(-1).p.encodings[0].maxBitrate,6000*1000,'the tuned rate survives the republish');
+  assert.equal(applied.filter(a=>a.kind==='video').at(-1).p.encodings[0].maxFramerate,30);
+  again.stop();first.stop();
+});
 test('api merges extra headers and keeps the machine-readable error code',async()=>{
   const calls=[];
   globalThis.fetch=async(url,init)=>{calls.push({url,init});return {ok:false,status:401,statusText:'Unauthorized',json:async()=>({error:'necesita código',code:'room_create_forbidden'})};};

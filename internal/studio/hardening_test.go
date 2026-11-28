@@ -132,6 +132,25 @@ func TestStateRejectsMalformedScenesAtomically(t *testing.T) {
 	}
 }
 
+func TestFitStateRoundTripsPerMediaSource(t *testing.T) {
+	r, _, _ := newRoom("fit-test", "", false, "")
+	h := &Hub{}
+	if err := h.setState(r, Msg{Value: json.RawMessage(`{"fit":{"cam-1":"cover"}}`)}); err != nil {
+		t.Fatalf("valid fit rejected: %v", err)
+	}
+	if got := r.Snapshot().Fit["cam-1"]; got != "cover" {
+		t.Fatalf("fit not stored: %q", got)
+	}
+	for _, bad := range []string{
+		`{"fit":{"bad/id":"cover"}}`,
+		`{"fit":{"cam-1":"stretch"}}`,
+	} {
+		if h.setState(r, Msg{Value: json.RawMessage(bad)}) == nil {
+			t.Fatalf("accepted malformed fit %s", bad)
+		}
+	}
+}
+
 func TestReplacingStreamDoesNotRemoveTheReplacement(t *testing.T) {
 	engine, err := sfu.NewEngine(sfu.Options{})
 	if err != nil {

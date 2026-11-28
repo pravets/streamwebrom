@@ -1,9 +1,31 @@
 """Live network/battery stats, touch ordering, clean stage and OBS quality/recovery."""
 import argparse
 import json
+import struct
 import time
+import zlib
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
+from smoke_util import click_centered
+
+
+def solid_png(width, height, rgb=(48, 48, 64)):
+    """A plain PNG built in memory: the media source needs a real picture size.
+
+    A 1x1 canvas is degenerate for the encoder, so the smoke uses a small but
+    normal 16:9 frame instead of shipping a fixture file in the repository.
+    """
+    row = b"\x00" + bytes(rgb) * width
+    raw = row * height
+
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+COVER_PNG = solid_png(320, 180)
 
 parser=argparse.ArgumentParser()
 parser.add_argument('--url',default='http://localhost:18443')
@@ -79,7 +101,8 @@ with sync_playwright() as pw:
     host.locator('#closeSourceSettings').click()
     host_guest=host.locator('#backstage .tile').filter(has=host.locator('.name').filter(has_text='Panelista'))
     stream_id=host_guest.get_attribute('data-id')
-    host_guest.locator('.stagebtn').click()
+    _btn = host_guest.locator('.stagebtn')
+    click_centered(_btn)
     host.locator('#studioViewMenu summary').click()
     host.locator('#stageView').click()
     expect(host.locator('#studioRoot')).to_have_class('studio cinema')
@@ -142,6 +165,41 @@ with sync_playwright() as pw:
     accent.click()
     expect(host.locator('#sourceSettingsActions button').filter(has_text='Quitar destacado')).to_be_visible()
     host.locator('#closeSourceSettings').click()
+    # Media sources letterbox by default; the host can switch one to cover and
+    # the guest preview must follow the program through the shared room state.
+    host.locator('#mediaFile').set_input_files(files=[{'name': 'cover.png', 'mimeType': 'image/png', 'buffer': COVER_PNG}])
+    media_tile = host.locator('#backstage .tile[data-kind="media"]')
+    expect(media_tile).to_have_count(1, timeout=20000)
+    media_tile.locator('.source-options').click()
+    host.locator('#sourceSettingsQuality select').select_option('cover')
+    host.locator('#closeSourceSettings').click()
+    guest_media = guest.locator('#grid .tile[data-kind="media"]')
+    try:
+        expect(guest_media).to_have_count(1, timeout=35000)
+    except AssertionError:
+        # The media source is published by the host; if the guest never
+        # subscribed, say why instead of only "count 0".
+        print('GUEST GRID:', guest.locator('#grid').inner_html()[:2000], flush=True)
+        print('PAGE ERRORS:', errors, flush=True)
+        raise
+    expect(guest_media).to_have_class(__import__('re').compile('fit-cover'))
+    expect(guest_media.locator('video')).to_have_css('object-fit', 'cover')
+    # Switching language relabels the labels this module builds itself: the
+    # conversation switcher and the dm button on the tiles. Inside the call the
+    # prejoin picker is hidden, so switch through the same module API it calls.
+    # The app is served under a hashed asset prefix (/assets/<hash>/js/...), so
+    # the module URL must be resolved from the page's own script: importing a
+    # bare /js/i18n.js would load a second copy whose state nobody renders.
+    guest.evaluate("""async () => {
+        const src = [...document.querySelectorAll('script[type=module]')]
+            .map((s) => s.src).find((u) => /guest\\.js$/.test(u));
+        const mod = await import(new URL('./i18n.js', src).href);
+        mod.setLang('ru');
+    }""")
+    expect(guest.locator('#chatBtn')).to_have_attribute('title', 'Чат')
+    guest.locator('#chatBtn').click()
+    expect(guest.locator('#chatConvos button').first).to_contain_text('Общий')
+    expect(guest_media.locator('.tile-dm')).to_have_attribute('title', 'Личное сообщение')
     assert not errors,errors
-    print(json.dumps({'liveRTTAndRoomPing':True,'batteryChargingUpdates':True,'touchOrderSurvivesRotation':True,'fullScreen16by9':True,'hostStageOnly':True,'cameraSend360p':True,'obsFirstFrameMs':first_frame_ms,'obsMediaRecovers':True,'output360p720p':True,'persistentRoomRosterAndOptions':True,'hiddenBackstage':True,'accentNeedsSceneAndSlot':True,'pageErrors':errors}),flush=True)
+    print(json.dumps({'liveRTTAndRoomPing':True,'batteryChargingUpdates':True,'touchOrderSurvivesRotation':True,'fullScreen16by9':True,'hostStageOnly':True,'cameraSend360p':True,'obsFirstFrameMs':first_frame_ms,'obsMediaRecovers':True,'output360p720p':True,'persistentRoomRosterAndOptions':True,'hiddenBackstage':True,'accentNeedsSceneAndSlot':True,'mediaCoverFollowsProgram':True,'chatLabelsFollowLanguage':True,'pageErrors':errors}),flush=True)
     mobile.close();context.close();browser.close()

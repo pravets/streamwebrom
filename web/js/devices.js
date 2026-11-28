@@ -12,6 +12,8 @@
 //   so whatever the camera exposes becomes a slider or switch.
 // - Mic gain is applied with a Web Audio GainNode only when != 100 %.
 import { $, el, toast, params } from "./rtc.js";
+import { makeFlag, makeOff } from "./url-params.js";
+import { PANEL_DEFAULTS } from "./bandwidth.js";
 import { applyEffect, effectActive, needsCamera, effectsPanel } from "./effects.js";
 import { attachNativeAudio } from "./native-audio.js";
 import { t, onLangChange } from "./i18n.js";
@@ -33,15 +35,14 @@ export const FPS = ["60", "50", "30", "25", "24", "15", "10"];
 // Suggested video bitrate per height (kbps), close to what VDO.Ninja uses.
 export const kbpsFor = (h) => ({ 2160: 16000, 1440: 9000, 1080: 6000, 720: 2500, 540: 1800, 480: 1200, 360: 800, 240: 400 })[h] || 2500;
 
-const truthy = (v) => v === "" || v === "1" || v === "true" || v === "on";
-const flag = (...names) => names.some((n) => params.has(n) && truthy(params.get(n)));
-const off = (...names) => names.some((n) => params.has(n) && ["0", "false", "off"].includes(params.get(n)));
+const flag = makeFlag(params);
+const off = makeOff(params);
 
 /** Preferences, with VDO.Ninja-compatible URL parameters taking priority. */
 export function loadPrefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch {}
-  p = { camera: "", mic: "", speaker: "", quality: "720", fps: "30", echo: true, denoise: true, autogain: true, stereo: false, mirror: true, gain: 100, codec: "", effect: "none", effectPreset: "", effectStrength: 50, flipH: false, flipV: false, ...p };
+  p = { camera: "", mic: "", speaker: "", quality: PANEL_DEFAULTS.quality, fps: PANEL_DEFAULTS.fps, echo: true, denoise: true, autogain: true, stereo: false, mirror: true, gain: 100, codec: "", effect: "none", effectPreset: "", effectStrength: 50, effectFit: "", flipH: false, flipV: false, ...p };
   const g = (n) => params.get(n);
   // &quality=0/1/2 (VDO) or a height
   if (params.has("quality")) p.quality = ({ 0: "1080", 1: "720", 2: "360" })[g("quality")] || g("quality");
@@ -72,6 +73,8 @@ export function loadPrefs() {
     if (Number.isFinite(value)) p.effectStrength = Math.min(100, Math.max(0, value));
   }
   if (g("bgpreset")) { p.effect = "bg"; p.effectPreset = g("bgpreset"); }
+  // &effectfit=contain|cover: how image/video assets fill the frame.
+  if (g("effectfit") === "contain" || g("effectfit") === "cover") p.effectFit = g("effectfit");
   if (g("gain")) p.gain = Math.max(0, Math.min(400, Number(g("gain")) || 100));
   return p;
 }
@@ -322,7 +325,11 @@ export async function renderPanel(root, prefs, onChange, opts = {}) {
     flipH: $("#dev-fliph", root).checked, flipV: $("#dev-flipv", root).checked,
   });
   const fire = (what) => { const p = read(); Object.assign(prefs, p); savePrefs(prefs); onChange(prefs, what); };
-  cam.onchange = q.onchange = fps.onchange = () => fire("video");
+  // Touching the quality/fps selects is explicit intent even when the chosen
+  // value equals the shipped default: the room bandwidth mode must not
+  // silently re-cap what the user just confirmed.
+  cam.onchange = () => fire("video");
+  q.onchange = fps.onchange = () => { prefs.tuned = true; fire("video"); };
   mic.onchange = () => fire("audio");
   gain.oninput = () => { gainLbl.textContent = gain.value + "%"; };
   gain.onchange = () => fire("audio");

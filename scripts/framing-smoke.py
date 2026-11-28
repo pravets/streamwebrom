@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from PIL import Image
 from playwright.sync_api import sync_playwright, expect
+from smoke_util import click_centered
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--url', default='http://localhost:18443')
@@ -41,7 +42,8 @@ with sync_playwright() as pw:
       sig.send({type:'media',cam:true,mic:false});
     }""", keys)
     expect(host.locator('#backstage [data-id="portrait"] video')).to_be_visible(timeout=20000)
-    host.locator('#backstage [data-id="portrait"] .stagebtn').click()
+    _btn = host.locator('#backstage [data-id="portrait"] .stagebtn')
+    click_centered(_btn)
     host.locator('#status').click()
     host.mouse.move(0,0)
     # Controls now live below the camera or in the enlarged options dialog.

@@ -107,6 +107,9 @@ WHIP al ID reservado `program` exige `hostKey`; usa `pushKey` para fuentes como 
 | `novideo` · `noaudio` · `muted` · `videomute` | Solo audio, solo video, entrar silenciado |
 | `screenshare` | Entrar compartiendo pantalla |
 | `effects=blur/bg/replace` · `blur` · `bgpreset=green` | Efecto de video (desenfoque, fondo virtual, reemplazo) |
+| `effectfit=contain/cover` | Imagen o video de fondo o de reemplazo: se encaja entero con bandas o llena el cuadro recortando los bordes |
+| `deaf` · `deafen` (`=0` lo desactiva) | Entrar sin escuchar la sala; tu micrófono sigue saliendo |
+| `landscape=1` (`=0` lo desactiva) | Mantener la pantalla del móvil en horizontal (se fija en pantalla completa; aviso en iOS) |
 
 **Salida para OBS** `/view?room=R&…#key=VIEWKEY`
 

@@ -31,6 +31,11 @@ export const es = {
   "misc.chatEmojis": "Emojis",
   "misc.chatStickers": "Stickers",
   "misc.chatHostBadge": "Anfitrión",
+  "misc.chatGeneral": "General",
+  "misc.chatConvosAria": "Conversaciones",
+  "misc.chatDmTo": "Mensaje directo",
+  "misc.chatDeleteTitle": "Eliminar mensaje",
+  "misc.chatDmOffNote": "El anfitrión desactivó los mensajes directos.",
 
   "misc.relayLocalActive": "Relé local activo",
   "misc.relayLocalActiveText": "Esta sala utiliza el relé local. El anfitrión puede habilitar Cloudflare en salas con contraseña desde Conexión y ahorro.",

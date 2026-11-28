@@ -9,15 +9,21 @@
 //   &quality=0|1|2 or &height=, &fps=, &stereo, &denoise=0, &echo=0, &autogain=0
 //   &videodevice= &audiodevice= &outputdevice=  index (1..n), part of the name, or 0 = off
 //   &novideo / &noaudio     audio-only / video-only
+//   &deaf / &deafen         join without hearing the room (mic keeps working)
+//   &landscape=1            lock the phone screen to landscape in fullscreen
 import { $, el, toast, params, api, Signal, publish, subscribe, levelMeter, staleRevision } from "./rtc.js";
 import { listDevices, loadPrefs, savePrefs, openMedia, renderPanel, cameraControls, applySink, onDeviceChange, settingsDialog, kbpsFor, explain } from "./devices.js";
+import { explicitQuality, explicitMemory, explicitFromParams } from "./bandwidth.js";
+import { makeFlag, makeOff } from "./url-params.js";
+import { fitCover } from "./compositor.js";
 import { remoteSnapshot, remoteStats, CAMCTL } from "./remote.js";
-import { chatMessage, appendChat, mountComposer } from "./chat.js";
+import { createChat, normalizeDmPolicy, dmAllowedByPolicy } from "./chat.js";
 import { automaticRoute } from "./network.js";
 import { callGrid } from "./call-grid.js";
 import { roomTelemetry, metricText } from "./telemetry.js";
 import { immersive } from "./immersive.js";
-import { RoomAudio, pictureInPicture } from "./room-audio.js";
+import { RoomAudio, pictureInPicture, effectiveDeafen } from "./room-audio.js";
+import { lockLandscape, unlockLandscape, installOrientationHint, isMobileUA, defaultLandscape } from "./orientation.js";
 import { screenAudioNotice, resumeCaptureAudio, stopScreenCapture } from "./devices.js";
 import { chooseScreen } from "./screen-share.js";
 import { installI18n, t, onLangChange } from "./i18n.js";
@@ -32,13 +38,37 @@ let media = new MediaStream(), pub = null, screenPub = null, screenMedia = null;
 let screenAllowed = false, screenPending = false, screenOpening = false, screenAttempt = 0, screenNotice = "";
 const extraCams = new Map(); // pubId -> { pub, media }
 let state = {};
+// Set from each welcome: a server with the chat wave always serializes
+// state.dmPolicy; its absence means direct messages are unsupported and the
+// dm UI must stay hidden instead of silently losing messages.
+let dmSupported = false;
 const remotes = new Map(); // streamId -> { tile, sub, video }
 const remoteInfo = new Map(), remoteRetries = new Map();
+const peers = new Map(); // peerId -> {id,name,role}: chat conversations and dm targets
 const roomAudio = new RoomAudio(blocked => $("#enableAudio")?.classList.toggle("hidden", !blocked));
 $("#enableAudio").onclick = () => roomAudio.resume();
 const closePiP = pictureInPicture($("#floatingVideo"), () => $("#grid .tile.expanded video") || $('#grid .tile:not([data-id="me"]) video') || $('#grid [data-id="me"] video'), text => toast(text));
 const sig = new Signal();
-const cinema = immersive($("#call"), $("#callFullscreen"), $("#exitFullscreen"));
+// Shared URL flag pattern (url-params.js): &name / &name=1 / &name=true /
+// &name=on enable; &name=0|false|off disables.
+const flag = makeFlag(params);
+const off = makeOff(params);
+const storedFlag = (key) => { try { return localStorage.getItem(key) === "1"; } catch { return false; } };
+const saveFlag = (key, on) => { try { localStorage.setItem(key, on ? "1" : "0"); } catch {} };
+// Forced landscape (ticket #14): the URL wins over the saved swr.landscape
+// choice; with neither, a mobile browser defaults to on (ticket: offer the
+// fixed orientation on connect from a phone).
+const storedLandscape = (() => { try { return localStorage.getItem("swr.landscape"); } catch { return null; } })();
+let landscapeMode = defaultLandscape({
+  urlOn: flag("landscape"), urlOff: off("landscape"), stored: storedLandscape,
+  mobile: isMobileUA(navigator.userAgent, navigator.maxTouchPoints || 0),
+});
+const orientationHint = installOrientationHint($("#orientationHint"));
+const cinema = immersive($("#call"), $("#callFullscreen"), $("#exitFullscreen"), {
+  // Android Chrome only allows the orientation lock inside fullscreen.
+  onFullscreen: () => { if (landscapeMode) lockLandscape(); },
+  onExitFullscreen: () => unlockLandscape(),
+});
 const telemetry = roomTelemetry(sig, () => pub?.pc, $("#roomPing"), peers => {
   for (const tile of document.querySelectorAll("#grid .tile")) {
     const label = tile.querySelector(".tile-latency");
@@ -88,7 +118,21 @@ api(`/api/rooms/${encodeURIComponent(room)}`).then((r) => {
 
 let remoteKbps = 0; // set by the host (director) from the studio
 const videoKbps = () => remoteKbps || Number(params.get("bitrate") || params.get("vb")) || kbpsFor(Number(prefs.quality));
-const pubOpts = (name) => ({ kind: "camera", name, videoKbps: videoKbps(), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 96 });
+// URL quality/bitrate/fps params and the guest's own panel choices are
+// explicit intent: they override the room bandwidth mode caps (balanced/eco),
+// exactly like the director panel does. Shipped defaults leave the room mode
+// in charge, so a source that never asked for anything is still protected.
+// The decision is re-made on every publication: a panel choice made mid-call
+// only lives in the publication options (setBitrate sets opts.explicit), so a
+// reconnect would otherwise republish at the defaults and get capped. The
+// module-level memory keeps that intent even after `pub` is dropped.
+const explicitMem = explicitMemory();
+function explicitNow() {
+  if (explicitMem.on) return true;
+  if (explicitQuality(prefs, explicitFromParams(params))) return true;
+  return !!pub?.opts?.explicit;
+}
+const pubOpts = (name, carriedExplicit = !!pub?.opts?.explicit) => ({ kind: "camera", name, videoKbps: videoKbps(), fps: Number(prefs.fps) || 30, codec: prefs.codec, stereo: prefs.stereo, audioKbps: prefs.stereo ? 256 : 96, explicit: carriedExplicit || explicitNow() });
 
 let meterTimer, noDeviceNotice = false;
 function showMeter(stream) {
@@ -120,7 +164,7 @@ async function startPreview() {
 }
 
 async function onPrefChange(p, what) {
-  if (what === "speaker") { for (const id of remotes.keys()) { const audio = roomAudio.get(id); if (audio) applySink(audio, p.speaker); } return; }
+  if (what === "speaker") { roomAudio.forEach((audio) => applySink(audio, p.speaker)); return; }
   if (what === "other") {
     mirrorPreview($("#preview"));
     const me = $('[data-id="me"] video'); if (me) mirrorPreview(me);
@@ -207,15 +251,19 @@ function connectionStatus(text, key = "") {
   $("#connection").classList.toggle("hidden", hadMediaConnection || !text);
   $("#connectionText").textContent = text;
 }
-async function connectMedia() {
+async function connectMedia(carriedExplicit = false) {
   if (connectingMedia) return;
   if (!media.getTracks().length) { connectionStatus(""); return; }
   const generation = ++mediaGeneration;
   connectingMedia = true;
   if (!hadMediaConnection) connectionStatus(t("guest.connectingMedia"), "guest.connectingMedia");
   try {
+    // Capture the explicit flag before dropping pub: a rate the guest panel or
+    // the director tuned must survive the republish that follows a reconnect.
+    // resume() already dropped pub, so it passes the flag in explicitly.
+    const explicit = carriedExplicit || !!pub?.opts?.explicit;
     pub?.stop(); pub = null;
-    const fresh = await publish(sig, media, pubOpts($("#name").value));
+    const fresh = await publish(sig, media, pubOpts($("#name").value, explicit));
     if (generation !== mediaGeneration) { fresh.stop(); return; }
     pub = fresh;
     unwatch(pub.id); // A rejoin snapshot can still contain our old stable ID.
@@ -253,27 +301,35 @@ async function resume(m) {
   myId = m.peerId;
   const mine = $('[data-id="me"]'); if (mine) mine.dataset.peer = myId;
   state = m.state || state;
+  // Apply the snapshot before the first await: chat and peer events arriving
+  // during publication must add to it, not be wiped by a late seed().
+  peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
+  dmSupported = "dmPolicy" in state; // state may be the merged previous one if this snapshot carried none
+  chatPanel.seed(m.chat || [], dmSupported ? m.dms || [] : undefined); // catch up on what we missed
+  refreshDmButtons();
   // Clear only the old session before awaiting publication. A stream-added
   // received during negotiation belongs to the new session and must survive.
   for (const id of [...remoteInfo.keys()]) unwatch(id);
   for (const s of m.streams || []) watch(s.id, s.kind, s.owner, "", s.revision);
   try { pub?.pc.close(); } catch {}
+  // Capture the explicit intent before dropping pub: a director command that
+  // only called setBitrate leaves it in the publication options, not in prefs.
+  const carriedExplicit = explicitNow();
   pub = null;
-  await connectMedia();
+  await connectMedia(carriedExplicit);
   if (sig.closed || sig.ws !== socket) return;
   stopScreen(false); // A new connection needs a new host authorization.
   if (sig.closed || sig.ws !== socket) return;
   for (const [id, x] of [...extraCams]) {
     try { x.pub.pc.close(); } catch {}
     try {
-      const fresh = await publish(sig, x.media, x.pub.opts);
+      const fresh = await publish(sig, x.media, { ...x.pub.opts, explicit: x.pub.opts.explicit || explicitNow() });
       if (sig.closed || sig.ws !== socket || extraCams.get(id) !== x) { fresh.stop(); continue; }
       x.pub = fresh;
       if (fresh.id !== id) { extraCams.delete(id); extraCams.set(fresh.id,x); }
       if (x.tile) { x.tile.dataset.id = fresh.id; x.tile.dataset.peer = myId; }
     } catch (e) { if (!sig.closed && sig.ws === socket) toast(t("guest.extraCamFailed", { error: e.message }),"err"); }
   }
-  $("#chatlog").replaceChildren(); for (const c of m.chat || []) addChat(c); // catch up on what we missed
   sendMedia();
 }
 
@@ -287,11 +343,19 @@ async function enter(m) {
   if (params.has("muted") || params.has("mute")) media.getAudioTracks().forEach((t) => (t.enabled = false));
   if (params.has("videomute") || params.has("vm")) media.getVideoTracks().forEach((t) => (t.enabled = false));
   addTile("me", media, $("#name").value + " " + t("guest.youBadge"), true, levelMeter(media));
+  // Snapshot first, then await publication: messages and peers arriving
+  // during connectMedia() must complement the snapshot, not be reset by it.
+  peers.clear(); for (const p of m.peers || []) peers.set(p.id, p);
+  dmSupported = "dmPolicy" in (m.state || {});
+  chatPanel.seed(m.chat || [], dmSupported ? m.dms || [] : undefined);
+  refreshDmButtons();
   await connectMedia();
   if (sig.closed) return;
   setMic(micOn()); setCam(camOn());
+  // Apply the prejoin choices (URL flag > saved preference > checkbox) on entry.
+  setSelfDeafened($("#deafenPre").checked);
+  setLandscapeMode($("#landscapePre").checked);
   for (const s of m.streams || []) watch(s.id, s.kind, s.owner, "", s.revision);
-  for (const c of m.chat || []) addChat(c);
   updateStageBadge();
   if (params.has("screenshare") || params.has("ss")) $("#screenBtn").click();
 }
@@ -300,9 +364,14 @@ async function enter(m) {
 sig.on("stream-added", (m) => watch(m.info.id, m.info.kind, m.info.owner, m.name, m.info.revision));
 sig.on("stream-updated", (m) => { if (staleRevision(m.info.revision, remoteInfo.get(m.info.id)?.revision)) return; unwatch(m.info.id); watch(m.info.id, m.info.kind, m.info.owner, m.name, m.info.revision); });
 sig.on("stream-removed", (m) => { const current = remoteInfo.get(m.stream); if (m.revision && current?.revision && m.revision !== current.revision) return; unwatch(m.stream); });
-sig.on("state", (m) => { state = m.state; updateStageBadge(); });
+sig.on("state", (m) => { state = m.state; updateStageBadge(); chatPanel.refresh(); refreshDmButtons(); });
 sig.on("screen-permission", screenPermission);
-sig.on("chat", (m) => addChat(m.comment));
+sig.on("chat", (m) => chatPanel.receive(m));
+sig.on("dm", (m) => chatPanel.receive(m));
+sig.on("chat-deleted", (m) => chatPanel.remove(m.id));
+sig.on("peer-joined", (m) => { peers.set(m.peer.id, m.peer); chatPanel.refresh(); refreshDmButtons(); });
+sig.on("peer-updated", (m) => { peers.set(m.peer.id, m.peer); chatPanel.refresh(); refreshDmButtons(); });
+sig.on("peer-left", (m) => { peers.delete(m.peerId); chatPanel.refresh(); refreshDmButtons(); });
 sig.on("reaction", (m) => fly(m.text));
 sig.on("request", (m) => {
   switch (m.action) {
@@ -324,6 +393,9 @@ sig.on("request", (m) => {
 // camera or mic ON still needs the guest's click (see ask()).
 const report = (action, value) => sig.send({ type: "report", action, value });
 let deafened = false;
+// The guest's own "don't hear the room" choice (ticket #12), independent of the
+// host's deafen: URL &deaf/&deafen wins over the saved swr.selfdeaf preference.
+let selfDeafened = flag("deaf", "deafen") ? true : off("deaf", "deafen") ? false : storedFlag("swr.selfdeaf");
 async function remoteControl(action, v) {
   const camTrack = () => { const t = media.getVideoTracks()[0]; return t?.raw || t; };
   switch (action) {
@@ -352,6 +424,9 @@ async function remoteControl(action, v) {
       }
       const targetPub = extra?.pub || pub;
       if (targetPub) await targetPub.setBitrate(rate, Number(targetPrefs.fps) || 30);
+      // Remember the director's intent for the main camera: the publication
+      // options carrying opts.explicit are dropped on reconnect.
+      if (!extra) explicitMem.mark();
       if (!extra) savePrefs(prefs);
       toast(t("guest.hostAdjustedVideo", { quality: targetPrefs.quality, fps: targetPrefs.fps, rate }));
       return report("quality", { ...await remoteSnapshot(extra?.media || media, targetPrefs, { videoKbps: rate }), stream: targetPub?.id });
@@ -387,8 +462,9 @@ async function remoteControl(action, v) {
     }
     case "deafen": case "undeafen":
       deafened = action === "deafen";
-      for (const id of remotes.keys()) { const audio = roomAudio.get(id); if (audio) audio.muted = deafened; }
-      return toast(deafened ? t("guest.deafenedNote") : t("guest.undeafenedNote"));
+      applyRoomMute();
+      // The host's undeafen never overrides the guest's own self-deafen choice.
+      return toast(deafened ? t("guest.deafenedNote") : selfDeafened ? t("guest.selfDeafenedNote") : t("guest.undeafenedNote"));
     case "message":
       return showHostMessage(String(v || "").slice(0, 500));
     case "reload": {
@@ -462,13 +538,14 @@ function addTile(id, stream, name, mine, level, kind = "camera", owner = "") {
   v.muted = true; v.srcObject = stream;
   if (mine) mirrorPreview(v); else applySink(v, prefs.speaker);
   v.play().catch(() => {});
-  const audio = mine ? null : roomAudio.add(id, stream); if (audio) audio.muted = deafened;
+  const audio = mine ? null : roomAudio.add(id, stream); if (audio) audio.muted = effectiveDeafen(deafened, selfDeafened);
   if (audio) applySink(audio, prefs.speaker);
-  const vol = mine ? null : el("input", { type: "range", min: 0, max: 1, step: 0.05, value: 1, title: t("guest.volumeTitle"), class: "tilevol", oninput: (e) => { if (audio) audio.volume = Number(e.target.value); } });
+  const vol = mine ? null : el("input", { type: "range", min: 0, max: 1, step: 0.05, value: 1, title: t("guest.volumeTitle"), "data-i18n-title": "guest.volumeTitle", class: "tilevol", oninput: (e) => { if (audio) audio.volume = Number(e.target.value); } });
+  const dmBtn = mine || !owner ? null : el("button", { class: "small tile-dm" + (canDM(peers.get(owner)) ? "" : " hidden"), type: "button", style: "position:absolute;top:6px;left:6px;z-index:2", title: t("misc.chatDmTo"), "aria-label": t("misc.chatDmTo"), "data-i18n-title": "misc.chatDmTo", "data-i18n-aria": "misc.chatDmTo", text: "✉", onclick: () => openGuestDM(owner) });
   const tile = el("div", { class: "tile", "data-id": id, "data-name": name, "data-kind": kind, "data-peer": mine ? myId : owner }, v,
-    el("span", { class: "tile-latency", title: t("guest.rttTitle"), text: t("guest.rttValue") }),
+    el("span", { class: "tile-latency", title: t("guest.rttTitle"), "data-i18n-title": "guest.rttTitle", text: t("guest.rttValue") }),
     el("button", { class: "tile-focus", type: "button", "aria-label": t("guest.focusAria", { name }), "aria-pressed": "false" }),
-    el("span", { class: "name", text: name }), vol);
+    el("span", { class: "name", text: name }), vol, dmBtn);
   $("#grid").append(tile); updateHiddenCameras(); telemetry.refresh();
   const speakingTimer = setInterval(() => { if (!tile.isConnected) return clearInterval(speakingTimer); tile.classList.toggle("speaking", level() > 0.15); }, 150);
   return tile;
@@ -478,6 +555,9 @@ function updateHiddenCameras() {
   for (const tile of document.querySelectorAll("#grid .tile")) {
     const id = tile.dataset.id === "me" ? pub?.id : tile.dataset.id;
     tile.classList.toggle("video-hidden", !!state.hidden?.[id]);
+    // Media sources letterbox by default; the host can switch each one to
+    // cover, and the guest preview must match the program (same shared state).
+    tile.classList.toggle("fit-cover", tile.dataset.kind === "media" && fitCover(state, id));
   }
 }
 function updateStageBadge() {
@@ -510,10 +590,57 @@ const micOn = () => !!media?.getAudioTracks().some((t) => t.enabled);
 const camOn = () => !!media?.getVideoTracks().some((t) => t.enabled);
 function sendMedia() { if (pub) sig.send({ type: "media", mic: micOn(), cam: camOn() }); }
 
+// ---------- guest-side toggles: self-deafen and forced landscape ----------
+// Room playback mute = host deafen OR the guest's own choice. Only roomAudio
+// elements are muted here; outgoing tracks/media are never touched.
+function applyRoomMute() {
+  const muted = effectiveDeafen(deafened, selfDeafened);
+  // Walk roomAudio itself, not remotes: a stream without a video tile (e.g.
+  // screen share) still plays room audio and must follow the mute.
+  roomAudio.forEach((audio) => { audio.muted = muted; });
+}
+function renderDeafenBtn() {
+  const b = $("#deafenBtn");
+  if (!b) return;
+  b.classList.toggle("off", selfDeafened);
+  b.setAttribute("aria-pressed", String(selfDeafened));
+}
+function setSelfDeafened(on, announce = false) {
+  selfDeafened = !!on;
+  saveFlag("swr.selfdeaf", selfDeafened);
+  const pre = $("#deafenPre"); if (pre) pre.checked = selfDeafened;
+  renderDeafenBtn();
+  applyRoomMute();
+  // Undeafening myself does not restore the room audio while the host's
+  // deafen is still active: pick the note by the effective mute state.
+  if (announce) {
+    const stillMuted = effectiveDeafen(deafened, selfDeafened);
+    toast(t(selfDeafened ? "guest.selfDeafenedNote" : stillMuted ? "guest.selfUndeafenedHostNote" : "guest.selfUndeafenedNote"), selfDeafened || stillMuted ? "" : "ok");
+  }
+}
+function setLandscapeMode(on, announce = false) {
+  landscapeMode = !!on;
+  saveFlag("swr.landscape", landscapeMode);
+  const pre = $("#landscapePre"); if (pre) pre.checked = landscapeMode;
+  const btn = $("#landscapeBtn");
+  if (btn) btn.setAttribute("aria-pressed", String(landscapeMode));
+  orientationHint.setEnabled(landscapeMode);
+  if (landscapeMode) { if (document.fullscreenElement === $("#call")) lockLandscape(); }
+  else unlockLandscape();
+  if (announce) toast(t(landscapeMode ? "guest.landscapeOn" : "guest.landscapeOff"));
+}
+$("#deafenBtn").onclick = () => setSelfDeafened(!selfDeafened, true);
+$("#deafenPre").onchange = (e) => setSelfDeafened(e.target.checked);
+$("#landscapeBtn").onclick = () => setLandscapeMode(!landscapeMode, true);
+$("#landscapePre").onchange = (e) => setLandscapeMode(e.target.checked);
+// Sync the controls with the resolved preferences (URL > localStorage) at start.
+setSelfDeafened(selfDeafened);
+setLandscapeMode(landscapeMode);
+
 $("#micBtn").onclick = () => setMic(!micOn());
 $("#camBtn").onclick = () => setCam(!camOn());
 $("#handBtn").onclick = () => { sig.send({ type: "hand" }); $("#handBtn").classList.toggle("on"); };
-$("#chatBtn").onclick = () => { $("#chat").classList.toggle("hidden"); $("#chatBtn").classList.remove("on"); };
+$("#chatBtn").onclick = () => { if (!$("#chat").classList.toggle("hidden")) chatPanel.focus(); };
 $("#reactBtn").onclick = () => $("#reactions").classList.toggle("hidden");
 for (const e of ["👏", "❤️", "😂", "🔥", "🎉", "👍"]) $("#reactions").append(el("button", { class: "small", onclick: () => sig.send({ type: "reaction", text: e }), text: e }));
 
@@ -631,7 +758,8 @@ function leave(text) {
   // Closing signalling first avoids queued unpublish operations delaying the
   // server's leave cleanup when a TURN connection takes time to shut down.
   sig.close(); pub?.stop(); screenPub?.stop(); for (const x of extraCams.values()) x.pub.stop();
-  clearInterval(meterTimer); gridLayout.destroy(); telemetry.destroy(); cinema.destroy(); closePiP();
+  explicitMem.reset();
+  clearInterval(meterTimer); gridLayout.destroy(); telemetry.destroy(); cinema.destroy(); orientationHint.destroy(); closePiP();
   for (const id of [...remoteInfo.keys()]) unwatch(id);
   roomAudio.close();
   stopScreenCapture(screenMedia);
@@ -656,17 +784,35 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keyup", (e) => { if (e.code === "Space" && ptt) { ptt = false; setMic(false); } });
 
 // ---------- chat ----------
-function addChat(c) {
-  const msg = chatMessage(c, { myId, myName: $("#name").value.trim() });
-  appendChat($("#chatlog"), msg);
-  if ($("#chat").classList.contains("hidden") && c.peerId !== myId) {
-    $("#chatBtn").classList.add("on");
-    if (msg.dataset.mention) toast(t("guest.mentioned", { name: c.from }));
+// General room chat plus direct conversations. Policy: "all" lets guests
+// write to anyone, "host-only" only to a host, "off" disables dms entirely.
+function canDM(p) {
+  if (!dmSupported) return false; // a server without the chat wave has no dm handler: a sent dm would vanish
+  if (!p || p.id === myId) return false;
+  return dmAllowedByPolicy(state.dmPolicy, p.role);
+}
+const chatPanel = createChat({
+  log: $("#chatlog"), switcher: $("#chatConvos"), input: $("#chatInput"), sendButton: $("#chatSend"),
+  offNote: $("#chatOffNote"),
+  send: (m) => sig.send(m),
+  myId: () => myId, myName: () => $("#name").value.trim(),
+  peers: () => [...peers.values()],
+  canDM,
+  policy: () => normalizeDmPolicy(state.dmPolicy),
+  visible: () => !$("#chat").classList.contains("hidden"),
+  onUnread: (n) => $("#chatBtn").classList.toggle("on", n > 0),
+  onMention: (c) => { if ($("#chat").classList.contains("hidden")) toast(t("guest.mentioned", { name: c.from })); },
+});
+function openGuestDM(peerId) {
+  $("#chat").classList.remove("hidden");
+  chatPanel.openDM(peerId);
+}
+function refreshDmButtons() {
+  for (const tile of document.querySelectorAll("#grid .tile")) {
+    const b = tile.querySelector(".tile-dm");
+    if (b) b.classList.toggle("hidden", !canDM(peers.get(tile.dataset.peer)));
   }
 }
-const composer = mountComposer($("#chatInput").parentElement, $("#chatInput"), (x) => sig.send(x.sticker ? { type: "chat", kind: "sticker", text: x.sticker } : { type: "chat", text: x.text }));
-$("#chatSend").onclick = composer.send;
-$("#chatInput").addEventListener("keydown", (e) => e.key === "Enter" && !e.isComposing && composer.send());
 
 function fly(e) {
   const n = el("div", { class: "reaction-fly", text: e });

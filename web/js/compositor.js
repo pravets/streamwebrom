@@ -12,8 +12,27 @@ export const W = 1920, H = 1080;
 // meaning for a source that is already in that scene's line-up: accenting
 // someone who was never added to the scene must stay a no-op.
 export const ACCENT_LAYOUTS = ["pip", "sidebar", "spotlight", "solo"];
-export function accentApplies(layout, stage, featured) {
-  return !!featured && ACCENT_LAYOUTS.includes(layout) && (stage || []).includes(featured);
+
+// One reading of the per-source fit state ("cover" crops, anything else
+// letterboxes). The compositor, the studio tiles and the guest preview must
+// all agree, so the check lives here instead of three inline copies.
+export const fitCover = (state, id) => state?.fit?.[id] === "cover";
+export function accentApplies(layout, stage, featured) {  return !!featured && ACCENT_LAYOUTS.includes(layout) && (stage || []).includes(featured);
+}
+
+/** One-click backstage accent: returns a new scene state. Adds `id` to the
+ * stage when missing, features it, and switches to "spotlight" if the layout
+ * has no accent slot. Clicking the source whose accent the current layout
+ * actually applies clears it (featured="") without touching the stage; a
+ * leftover `featured` that the layout ignores is not "active" and must not
+ * swallow the first click. Pure: the input is not mutated. */
+export function quickAccent(scene, id) {
+  if ((scene.featured || "") === id && accentApplies(scene.layout, scene.stage, scene.featured)) return { ...scene, featured: "" };
+  const next = { ...scene, featured: id };
+  const stage = scene.stage || [];
+  if (!stage.includes(id)) next.stage = [...stage, id];
+  if (!ACCENT_LAYOUTS.includes(next.layout)) next.layout = "spotlight";
+  return next;
 }
 
 /** Returns rectangles [{x,y,w,h}] for n tiles. */
@@ -195,11 +214,23 @@ export class Compositor {
       if (!r) return;
       const full = r.w >= W - 1;
       ctx.save();
-      if (bubble && !full) { roundRect(ctx, r.x, r.y, r.w, r.h, 18); ctx.clip(); }
+      // Every non-full tile is clipped to its own rectangle: cover (crop)
+      // sources would otherwise paint over the neighbouring tiles when the
+      // theme has no rounded bubble (minimal) or the layout is solo.
+      if (!full) {
+        if (bubble) roundRect(ctx, r.x, r.y, r.w, r.h, 18);
+        else { ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); }
+        ctx.clip();
+      }
       ctx.fillStyle = "#111";
       ctx.fillRect(r.x, r.y, r.w, r.h);
       const hidden = (st.hidden && st.hidden[id]) || s.camOff;
-      const ok = !hidden && (s.kind === "screen" ? drawContain(ctx, s.video, r) : drawCover(ctx, s.video, r, !!s.mirror));
+      // Screens and media letterbox by default; a media source can opt into
+      // cover (crop) through the shared room state (state.fit[id] === "cover").
+      const mediaCover = s.kind === "media" && fitCover(st, id);
+      const ok = !hidden && (s.kind === "screen" || (s.kind === "media" && !mediaCover)
+        ? drawContain(ctx, s.video, r)
+        : drawCover(ctx, s.video, r, s.kind === "media" ? false : !!s.mirror));
       if (!ok) {
         ctx.fillStyle = "#1c1c2a"; ctx.fillRect(r.x, r.y, r.w, r.h);
         ctx.fillStyle = accent; ctx.beginPath();

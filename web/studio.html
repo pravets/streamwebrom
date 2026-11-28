@@ -104,8 +104,10 @@
       <div class="pane-toolbar"><span id="activePanelTitle" data-i18n="studio.comments">Comentarios</span><button id="closePanel" class="small ghost" title="Ocultar panel" data-i18n-title="studio.hidePanel" aria-label="Ocultar panel" data-i18n-aria="studio.hidePanel">×</button></div>
       <div class="tabpane active" data-pane="chat">
         <div class="panehead" data-i18n="studio.comments">Comentarios</div>
+        <div class="row wrap" id="chatConvos" role="group" aria-label="Conversaciones" data-i18n-aria="misc.chatConvosAria" style="margin-bottom:6px"></div>
         <div class="chatlog" id="chatlog"></div>
         <div class="row composer"><input id="chatInput" placeholder="Escribe un mensaje…" data-i18n-placeholder="studio.chatPlaceholder" maxlength="500"><button id="chatSend" class="primary" data-i18n="studio.send">Enviar</button></div>
+        <p id="chatOffNote" class="muted hidden" data-i18n="misc.chatDmOffNote">El anfitrión desactivó los mensajes directos.</p>
       </div>
 
       <div class="tabpane" data-pane="banners">
@@ -126,6 +128,7 @@
         <div class="row wrap"><button id="brandClearLogo" class="small" data-i18n="studio.removeLogo">Quitar logo</button><button id="brandClearOverlay" class="small" data-i18n="studio.removeOverlay">Quitar overlay</button><span class="grow"></span><button class="primary" id="brandSave" data-i18n="studio.apply">Aplicar</button></div>
         <div><label for="showTitle" data-i18n="studio.showTitle">Título del programa</label><div class="row"><input id="showTitle" maxlength="120"><button id="titleSave" class="small" data-i18n="studio.save">Guardar</button></div></div>
         <label class="row"><input type="checkbox" id="lobbyToggle"> <span data-i18n="studio.waitingRoom">Sala de espera (aprobar invitados)</span></label>
+        <div class="row"><label for="dmPolicy" data-i18n="studio.dmPolicy">Mensajes directos</label><select id="dmPolicy"><option value="all" data-i18n="studio.dmPolicyAll">Todos</option><option value="host-only" data-i18n="studio.dmPolicyHostOnly">Solo al anfitrión</option><option value="off" data-i18n="studio.dmPolicyOff">Desactivados</option></select></div>
 
       </div>
 

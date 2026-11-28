@@ -71,6 +71,10 @@ export const effectActive = (p) => !!p.effect && p.effect !== "none";
 // Whole-frame filters take their strength from the slider (0-100, 50 by default).
 export const effectStrength = (p) => Math.min(100, Math.max(0, Number(p.effectStrength ?? 50)));
 export const strengthEffect = (mode) => mode === "fill-blur" || mode === "pixelate";
+// How an image/video asset fills the frame: "cover" crops, "contain" letterboxes.
+// Read on every frame (like effectStrength) so the panel select applies live.
+// Defaults when the pref is unset: replace -> contain, bg -> cover.
+export const fitMode = (p, mode) => p.effectFit === "cover" || p.effectFit === "contain" ? p.effectFit : (mode === "replace" ? "contain" : "cover");
 export const needsCamera = (p) => p.effect !== "replace";
 
 // ---------- frame clock that survives background tabs ----------
@@ -108,6 +112,14 @@ function cover(ctx, m, W, H) {
   const [w, h] = dims(m);
   if (!w || !h) return;
   const s = Math.max(W / w, H / h), dw = w * s, dh = h * s;
+  ctx.drawImage(m, (W - dw) / 2, (H - dh) / 2, dw, dh);
+}
+
+/** Draw `m` contained (letterboxed) inside the canvas, keeping its aspect ratio. */
+function contain(ctx, m, W, H) {
+  const [w, h] = dims(m);
+  if (!w || !h) return;
+  const s = Math.min(W / w, H / h), dw = w * s, dh = h * s;
   ctx.drawImage(m, (W - dw) / 2, (H - dh) / 2, dw, dh);
 }
 
@@ -214,7 +226,11 @@ export async function applyEffect(track, p) {
   function background() {
     if (mode === "bg") {
       if (p.effectPreset) return paintPreset(ctx, p.effectPreset, W, H);
-      if (ready(bgAsset)) return cover(ctx, bgAsset, W, H);
+      if (ready(bgAsset)) {
+        // Contain letterboxes: paint the backdrop first so the bars are not stale frames.
+        if (fitMode(p, "bg") === "contain") { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); return contain(ctx, bgAsset, W, H); }
+        return cover(ctx, bgAsset, W, H);
+      }
       return paintPreset(ctx, "studio", W, H);
     }
     // blur: tiny copy scaled back up
@@ -240,7 +256,7 @@ export async function applyEffect(track, p) {
   function draw(t0) {
     if (mode === "replace") {
       ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-      if (ready(replaceAsset)) cover(ctx, replaceAsset, W, H);
+      if (ready(replaceAsset)) (fitMode(p, "replace") === "cover" ? cover : contain)(ctx, replaceAsset, W, H);
       return;
     }
     if (!cam || cam.readyState < 2) return;
@@ -316,12 +332,17 @@ export function effectsPanel(prefs, onChange, persist) {
   performanceMode.value = prefs.effectPerformance || "fast";
   performanceMode.onchange = () => { prefs.effectPerformance = performanceMode.value; onChange("video"); };
   const performanceRow = el("div", {}, el("label", tx("effects.performance")), performanceMode);
+  const fit = el("select", { id: "dev-effect-fit" }, opt("contain", "effects.fitContain"), opt("cover", "effects.fitCover"));
+  fit.onchange = () => { prefs.effectFit = fit.value; persist?.(); };
+  const fitRow = el("div", {}, el("label", tx("effects.fit")), fit);
   const presetRow = el("div", {}, el("label", tx("effects.background")), preset);
   const fileRow = el("div", {}, el("label", tx("effects.fileLabel")), file, info);
   const sync = () => {
     strengthRow.classList.toggle("hidden", !strengthEffect(sel.value));
     presetRow.classList.toggle("hidden", sel.value !== "bg");
     fileRow.classList.toggle("hidden", !(sel.value === "replace" || (sel.value === "bg" && !preset.value)));
+    fit.value = fitMode(prefs, sel.value === "replace" ? "replace" : "bg");
+    fitRow.classList.toggle("hidden", !(sel.value === "replace" || (sel.value === "bg" && !preset.value && assetFor("bg", prefs))));
     showInfo();
   };
   sel.onchange = () => { prefs.effect = sel.value; sync(); onChange("video"); };
@@ -329,7 +350,7 @@ export function effectsPanel(prefs, onChange, persist) {
   file.onchange = async () => {
     try {
       await setAsset(sel.value === "replace" ? "replace" : "bg", file.files[0], prefs);
-      showInfo(); onChange("video");
+      showInfo(); sync(); onChange("video");
     } catch (e) { toast(e.message, "err"); }
     file.value = "";
   };
@@ -337,7 +358,7 @@ export function effectsPanel(prefs, onChange, persist) {
   sync();
   // "Usando: …" is not a plain dictionary lookup, so it follows the language here.
   const details = el("details", { class: "camdetails", open: effectActive(prefs) }, el("summary", tx("effects.summary")),
-    el("div", { class: "col", style: "margin-top:8px" }, el("div", {}, el("label", tx("effects.effect")), sel), strengthRow, performanceRow, presetRow, fileRow,
+    el("div", { class: "col", style: "margin-top:8px" }, el("div", {}, el("label", tx("effects.effect")), sel), strengthRow, performanceRow, fitRow, presetRow, fileRow,
       el("p", { class: "muted", style: "margin:0;font-size:12px" }, el("span", tx("effects.note")))));
   const drop = onLangChange(() => { if (details.isConnected) showInfo(); else drop(); });
   return details;

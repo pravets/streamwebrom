@@ -5,6 +5,7 @@ is read only through a masked prompt; no credentials are printed or saved.
 import argparse,getpass,json,math,struct,tempfile,time,urllib.parse,urllib.request,wave
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
+from smoke_util import click_centered
 p=argparse.ArgumentParser();p.add_argument('--url',default='http://localhost:18446');p.add_argument('--browser');p.add_argument('--fixture',action='store_true');p.add_argument('--public-relay-host');p.add_argument('--screenshots');a=p.parse_args()
 master='fixture-master-only' if a.fixture else getpass.getpass('Master password (masked): ')
 flags=['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--autoplay-policy=no-user-gesture-required']
@@ -131,7 +132,8 @@ with tempfile.TemporaryDirectory(prefix='swr-multiparty-') as folder,sync_playwr
         scene.wait_for_timeout(150)
     assert scene_ready,'Screen audio was not audible in the OBS scene'
     # An authorized panelist also shares audio to the host and other panelists.
-    host.locator('#backstage [data-id="'+ids[1]+'"] .stagebtn').click()
+    _btn = host.locator('#backstage [data-id="'+ids[1]+'"] .stagebtn')
+    click_centered(_btn)
     guests[0].locator('#screenBtn').click();host.get_by_role('button',name='Autorizar pantalla',exact=True).click();guests[0].locator('#startScreen').click();guests[0].locator('#confirmShare').click()
     guest_screen=host.locator('#backstage [data-kind="screen"]:not([data-id="host-screen"])');expect(guest_screen).to_have_count(1,timeout=30000);screen_id=guest_screen.get_attribute('data-id')
     advancing(host,'[data-id="'+screen_id+'"] video')

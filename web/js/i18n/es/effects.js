@@ -32,4 +32,7 @@ export const es = {
   "effects.fillBlur": "Desenfoque de todo el video",
   "effects.pixelate": "Pixelado",
   "effects.strength": "Intensidad",
+  "effects.fit": "Encaje en el cuadro",
+  "effects.fitContain": "Encajar (con bandas)",
+  "effects.fitCover": "Llenar (recortar)",
 };
